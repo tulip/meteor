@@ -1,6 +1,8 @@
 name: Check core Meteor packages
 on:
   push:
+    branches:
+      - tulip-*
     paths:
       - 'packages/**'
   pull_request:
