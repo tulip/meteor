@@ -1,11 +1,11 @@
 
 Package.describe({
   summary: "Collection of small helpers: _.map, _.each, ...",
-  version: '1.6.1-test',
+  version: '1.6.1',
 });
 
 Npm.depends({
-  '@types/underscore': '1.13.0',
+  '@types/underscore': '1.11.9',
 });
 Package.onUse(function (api) {
   // Like all packages, we have an implicit dependency on the 'meteor'
