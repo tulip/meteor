@@ -6,6 +6,7 @@ on:
     paths:
       - 'packages/**'
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - 'packages/**'
 jobs:
