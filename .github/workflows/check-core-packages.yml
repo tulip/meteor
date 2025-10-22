@@ -1,0 +1,20 @@
+name: Check core Meteor packages
+on:
+  push:
+    branches:
+      - tulip-*
+    paths:
+      - 'packages/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'packages/**'
+jobs:
+  check-core-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up local Meteor version
+        run: ./meteor --get-ready
+      - name: Run core package tests
+        run: ./packages/test-in-console/run.sh
