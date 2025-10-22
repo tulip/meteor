@@ -4,16 +4,16 @@ Package.describe({
 });
 
 Npm.depends({
-  'basic-auth-connect': '1.0.0',
-  'cookie-parser': '1.4.6',
+  'basic-auth-connect': '1.1.0',
+  'cookie-parser': '1.4.7',
   connect: '3.7.0',
-  compression: '1.7.4',
+  compression: '1.8.1',
   errorhandler: '1.5.1',
   parseurl: '1.3.3',
-  send: '0.18.0',
+  send: '0.19.0',
   'stream-to-string': '1.2.1',
   qs: '6.11.2',
-  useragent: '2.3.0',
+  useragent: 'git+ssh://github.com/tulip/useragent#ca9d39805e18207e5eb3d2c3d601f8487b6b6ad8',
   '@vlasky/whomst': '0.1.7',
   '@types/connect': '3.4.38',
 });
