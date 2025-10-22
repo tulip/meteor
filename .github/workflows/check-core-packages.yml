@@ -12,10 +12,6 @@ on:
 jobs:
   check-core-packages:
     runs-on: ubuntu-latest
-    env:
-       # Allow superuser for Meteor CLI since the GHA runner runs as root.
-       # This mainly affects file permissions and is fine for CI.
-       METEOR_ALLOW_SUPERUSER: true
     steps:
       - uses: actions/checkout@v4
       - name: Set up local Meteor version
