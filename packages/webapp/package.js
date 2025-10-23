@@ -13,7 +13,7 @@ Npm.depends({
   send: '0.19.0',
   'stream-to-string': '1.2.1',
   qs: '6.11.2',
-  useragent: 'git+ssh://github.com/tulip/useragent#ca9d39805e18207e5eb3d2c3d601f8487b6b6ad8',
+  useragent: 'git+https://github.com/tulip/useragent#ca9d39805e18207e5eb3d2c3d601f8487b6b6ad8',
   '@vlasky/whomst': '0.1.7',
   '@types/connect': '3.4.38',
 });
