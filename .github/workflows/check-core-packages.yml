@@ -15,8 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up local Meteor version
-        run: |
-          git config --global url."https://${{ secrets.SHARED_REPO_ACCESS_PAT }}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
-          ./meteor --get-ready
+        run: ./meteor --get-ready
       - name: Run core package tests
         run: ./packages/test-in-console/run.sh
