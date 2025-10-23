@@ -16,7 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Set up local Meteor version
         run: |
-          echo "git+https://github.com/:_authToken=${{ secrets.SHARED_REPO_ACCESS_PAT }}" >> .npmrc
+          set -x
+          printf '//github.com/:_authToken=${{ secrets.SHARED_REPO_ACCESS_PAT }}\nalways-auth=true' >> .npmrc
+          set +x
           ./meteor --get-ready
       - name: Run core package tests
         run: ./packages/test-in-console/run.sh
