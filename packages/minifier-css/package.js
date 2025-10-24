@@ -4,7 +4,7 @@ Package.describe({
 });
 
 Npm.depends({
-  postcss: '8.4.21',
+  postcss: '8.5.6',
   cssnano: '5.1.15'
 });
 
