@@ -2,9 +2,9 @@
   "lockfileVersion": 1,
   "dependencies": {
     "@types/node": {
-      "version": "20.12.7",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-20.12.7.tgz",
-      "integrity": "sha512-wq0cICSkRLVaf3UGLMGItu/PtdY7oaXaI/RVU+xliKVOtRna3PRY57ZDfztpDL0n11vfymMUnXv8QwYCO7L1wg=="
+      "version": "24.9.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.9.1.tgz",
+      "integrity": "sha512-QoiaXANRkSXK6p0Duvt56W208du4P9Uye9hWLWgGMDTEoKPhuenzNcC4vGUmrNkiOKTlIrBoyNQYNpSwfEZXSg=="
     },
     "@types/nodemailer": {
       "version": "6.4.14",
@@ -17,9 +17,9 @@
       "integrity": "sha512-+I//4cYPccV8LdmBLiX8CYvf9Sp3vQsrqu2QNXRcrbiWvcx/UdlFiqUJJzxRQxgsZmvhXhn4cSKeSmoFjVdupA=="
     },
     "bn.js": {
-      "version": "4.12.0",
-      "resolved": "https://registry.npmjs.org/bn.js/-/bn.js-4.12.0.tgz",
-      "integrity": "sha512-c98Bf3tPniI+scsdk237ku1Dc3ujXQTSgyiPUDEOe7tRkhrqridvh8klBv0HCEso1OLOYcHuCv/cS6DNxKH+ZA=="
+      "version": "4.12.2",
+      "resolved": "https://registry.npmjs.org/bn.js/-/bn.js-4.12.2.tgz",
+      "integrity": "sha512-n4DSx829VRTRByMRGdjQ9iqsN0Bh4OolPsFnaZBLcbi8iXcB+kJ9s7EnRt4wILZNV3kPLHkRVfOc/HvhC3ovDw=="
     },
     "inherits": {
       "version": "2.0.4",
@@ -37,14 +37,14 @@
       "integrity": "sha512-qtoKfGFhvIFW5kLfrkw2R6Nm6Ur4LNUMykyqu6n9BRKJuyQrqEGwdXXUAbwWEKt33dlWUGXb7rzmJP/p4+O+CA=="
     },
     "nodemailer-openpgp": {
-      "version": "2.2.0",
-      "resolved": "https://registry.npmjs.org/nodemailer-openpgp/-/nodemailer-openpgp-2.2.0.tgz",
-      "integrity": "sha512-e6+pgGVpMEZ2ywHcAtTdKhUCU5HwZI23RFoNUA/mJPytUW369mQqEcHFLUoxEITOLrzeoLjn5wOYFYzSpef+Tg=="
+      "version": "2.2.1",
+      "resolved": "https://registry.npmjs.org/nodemailer-openpgp/-/nodemailer-openpgp-2.2.1.tgz",
+      "integrity": "sha512-iCl3qEnE1y21V6IM9GeFXcmvqqKJF9kiOYgtNwmAzK8iSL718umy0yIexkxeXAm5INou16MYv/pyqndhtmjutA=="
     },
     "openpgp": {
-      "version": "5.9.0",
-      "resolved": "https://registry.npmjs.org/openpgp/-/openpgp-5.9.0.tgz",
-      "integrity": "sha512-wEI6TAinCAq8ZLZA4oZ3ZtJ2BhhHj+CiPCd8TzE7zCicr0V8tvG5UF76OtddLLOJcK63w3Aj3KiRd+VLMScirQ=="
+      "version": "5.11.1",
+      "resolved": "https://registry.npmjs.org/openpgp/-/openpgp-5.11.1.tgz",
+      "integrity": "sha512-TynUBPuaSI7dN0gP+A38CjNRLxkOkkptefNanalDQ71BFAKKm+dLbksymSW5bUrB7RcAneMySL/Y+r/TbLpOnQ=="
     },
     "safer-buffer": {
       "version": "2.1.2",
@@ -57,9 +57,9 @@
       "integrity": "sha512-DQi1h8VEBA/lURbSwFtEHnSTb9s2/pwLEaFuNhXwy1Dx3Sa0lOuYT2yNUr4/j2fs8oCAMANtrZ5OrPZtyVs3MQ=="
     },
     "undici-types": {
-      "version": "5.26.5",
-      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-5.26.5.tgz",
-      "integrity": "sha512-JlCMO+ehdEIKqlFxk6IfVoAUVmgz7cU7zD/h9XZ0qzeosSHmUJVOzSQvvYSYWXkFXC+IfLKSIffhv0sVZup6pA=="
+      "version": "7.16.0",
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.16.0.tgz",
+      "integrity": "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="
     }
   }
 }
