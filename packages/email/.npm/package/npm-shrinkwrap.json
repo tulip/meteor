@@ -39,12 +39,19 @@
     "nodemailer-openpgp": {
       "version": "2.2.1",
       "resolved": "https://registry.npmjs.org/nodemailer-openpgp/-/nodemailer-openpgp-2.2.1.tgz",
-      "integrity": "sha512-iCl3qEnE1y21V6IM9GeFXcmvqqKJF9kiOYgtNwmAzK8iSL718umy0yIexkxeXAm5INou16MYv/pyqndhtmjutA=="
+      "integrity": "sha512-iCl3qEnE1y21V6IM9GeFXcmvqqKJF9kiOYgtNwmAzK8iSL718umy0yIexkxeXAm5INou16MYv/pyqndhtmjutA==",
+      "dependencies": {
+        "openpgp": {
+          "version": "5.11.1",
+          "resolved": "https://registry.npmjs.org/openpgp/-/openpgp-5.11.1.tgz",
+          "integrity": "sha512-TynUBPuaSI7dN0gP+A38CjNRLxkOkkptefNanalDQ71BFAKKm+dLbksymSW5bUrB7RcAneMySL/Y+r/TbLpOnQ=="
+        }
+      }
     },
     "openpgp": {
-      "version": "5.11.1",
-      "resolved": "https://registry.npmjs.org/openpgp/-/openpgp-5.11.1.tgz",
-      "integrity": "sha512-TynUBPuaSI7dN0gP+A38CjNRLxkOkkptefNanalDQ71BFAKKm+dLbksymSW5bUrB7RcAneMySL/Y+r/TbLpOnQ=="
+      "version": "5.11.3",
+      "resolved": "https://registry.npmjs.org/openpgp/-/openpgp-5.11.3.tgz",
+      "integrity": "sha512-jXOPfIteBUQ2zSmRG4+Y6PNntIIDEAvoM/lOYCnvpXAByJEruzrHQZWE/0CGOKHbubwUuty2HoPHsqBzyKHOpA=="
     },
     "safer-buffer": {
       "version": "2.1.2",

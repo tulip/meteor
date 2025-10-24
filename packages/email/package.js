@@ -7,7 +7,8 @@ Npm.depends({
   nodemailer: '6.9.10',
   'stream-buffers': '3.0.2',
   '@types/nodemailer': '6.4.14',
-  'nodemailer-openpgp' : '2.2.1'
+  'nodemailer-openpgp' : '2.2.1',
+  'openpgp': '5.11.3'
 });
 
 Package.onUse(function(api) {
