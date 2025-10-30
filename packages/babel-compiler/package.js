@@ -5,8 +5,8 @@ Package.describe({
 });
 
 Npm.depends({
-  '@meteorjs/babel': '7.18.4',
-  'json5': '2.1.1'
+  '@meteorjs/babel': 'https://github.com/tulip/meteor/releases/download/updated-meteor-babel/meteorjs-babel-7.18.4.tgz',
+  'json5': '2.2.3'
 });
 
 Package.onUse(function (api) {
