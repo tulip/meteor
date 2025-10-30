@@ -1,4 +1,4 @@
-This copy of the @meteorjs/babel package has depedencies updated to resolve some vulnerabilities. It was created to be used in the our fork of the babel-compiler atmosphere package.
+This copy of the @meteorjs/babel package has dependencies updated to resolve some vulnerabilities. It was created to be used in our fork of the babel-compiler Atmosphere package.
 
 ---
 
