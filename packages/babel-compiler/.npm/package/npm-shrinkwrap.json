@@ -400,7 +400,7 @@
     },
     "@meteorjs/babel": {
       "version": "https://github.com/tulip/meteor/releases/download/updated-meteor-babel/meteorjs-babel-7.18.4.tgz",
-      "integrity": "sha512-Rxfg9pybw5a6ob4QrzURTCnLR8G2qQqomFC31UKIwh5vmw7T7eHSbNJXA+tPInjaggvAQqsN3grZkweMDWlXZA=="
+      "integrity": "sha512-J3XiK1aGqU9xQnNTTwnkshnhxW59FUqsyiegSdR63liJ4Zc89H+TKWvCuJlAUJQypsSIuvWUJ7413g9QOXU3ag=="
     },
     "@meteorjs/reify": {
       "version": "0.24.1",
