@@ -30,7 +30,6 @@ describe("@decorators", function () {
 
     assert.strictEqual(legacyResult.code.trim(), [
       "var _class;",
-      "",
       "var A = dec(_class = function A() {}) || _class;",
     ].join("\n"));
   });
@@ -62,7 +61,6 @@ describe("@decorators", function () {
 
     assert.strictEqual(legacyResult.code.trim(), [
       "var _class;",
-      "",
       "let A = dec(_class = class A {}) || _class;",
     ].join("\n"));
   });
@@ -98,7 +96,6 @@ describe("@decorators", function () {
 
     assert.strictEqual(legacyResult.code.trim(), [
       "var _class;",
-      "",
       "let A = dec(_class = class A {}) || _class;",
     ].join("\n"));
   });
