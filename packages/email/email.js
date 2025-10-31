@@ -289,7 +289,7 @@ Email.send = function (options) {
  * You can create a `MailComposer` object via
  * `new EmailInternals.NpmModules.mailcomposer.module`.
  * @param {String} [options.encryptionKeys] An array that holds the public keys used to encrypt.
- * @param {String} [options.shouldSign] Enables you to allow or disallow email signing. 
+ * @param {String} [options.shouldSign] Enables you to allow or disallow email signing.
 */
 Email.sendAsync = async function (options) {
 

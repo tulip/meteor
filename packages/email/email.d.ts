@@ -9,11 +9,13 @@ export namespace Email {
    * this interface to match your custom options.
    */
   interface ExtraMailOptions {}
-  type EmailOptions = { mailComposer: MailComposer } | (ExtraMailOptions & SendMailOptions)
+  type EmailOptions =
+    | { mailComposer: MailComposer }
+    | (ExtraMailOptions & SendMailOptions);
 
   type CustomEmailOptions = EmailOptions & {
     packageSettings?: unknown;
-  }
+  };
 
   function send(options: EmailOptions): void;
   function sendAsync(options: EmailOptions): Promise<void>;
