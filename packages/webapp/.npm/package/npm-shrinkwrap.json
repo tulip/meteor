@@ -7,9 +7,9 @@
       "integrity": "sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug=="
     },
     "@types/node": {
-      "version": "24.9.1",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.9.1.tgz",
-      "integrity": "sha512-QoiaXANRkSXK6p0Duvt56W208du4P9Uye9hWLWgGMDTEoKPhuenzNcC4vGUmrNkiOKTlIrBoyNQYNpSwfEZXSg=="
+      "version": "24.9.2",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.9.2.tgz",
+      "integrity": "sha512-uWN8YqxXxqFMX2RqGOrumsKeti4LlmIMIyV0lgut4jx7KQBcBiW6vkDtIBvHnHIquwNfJhk8v2OtmO8zXWHfPA=="
     },
     "@vlasky/whomst": {
       "version": "0.1.7",
@@ -464,7 +464,7 @@
       "integrity": "sha512-pjy2bYhSsufwWlKwPc+l3cN7+wuJlK6uz0YdJEOlQDbl6jo/YlPi4mb8agUkVC8BF7V8NuzeyPNqRksA3hztKQ=="
     },
     "useragent": {
-      "version": "git+ssh://git@github.com/tulip/useragent.git#ca9d39805e18207e5eb3d2c3d601f8487b6b6ad8"
+      "version": "git+https://github.com/tulip/useragent.git#ca9d39805e18207e5eb3d2c3d601f8487b6b6ad8"
     },
     "utils-merge": {
       "version": "1.0.1",
