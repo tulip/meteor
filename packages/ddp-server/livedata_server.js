@@ -506,7 +506,9 @@ Object.assign(Session.prototype, {
     if (! self.inQueue)
       return;
 
-    // Drop the merge box data immediately.
+    // Drop the merge box data immediately. Every field that other code
+    // uses as an "is alive?" guard must be nulled here — send() checks
+    // self.socket, processMessage() checks self.inQueue, etc.
     self.inQueue = null;
     self.collectionViews = new Map();
 
@@ -518,6 +520,7 @@ Object.assign(Session.prototype, {
     if (self.socket) {
       self.socket.close();
       self.socket._meteorSession = null;
+      self.socket = null;
     }
 
     Package['facts-base'] && Package['facts-base'].Facts.incrementServerFact(

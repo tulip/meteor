@@ -261,6 +261,26 @@ export class Connection {
         self._heartbeat.stop();
         self._heartbeat = null;
       }
+
+      // When the connection won't auto-reconnect, reject any outstanding
+      // method calls. Without this, methods that received their 'result'
+      // but missed the 'updated' message (e.g. because the server closed
+      // the WebSocket between the two) hang forever — MethodInvoker
+      // requires both before firing the callback.
+      if (!options.retry || self._stream._forcedToDisconnect) {
+        // Clear method blocks before cleanup to prevent
+        // _outstandingMethodFinished from throwing invariant errors
+        // as we mass-complete invokers during teardown.
+        self._outstandingMethodBlocks = [];
+
+        // Abort all outstanding method invokers. If a result was already
+        // received, it is attached to the error for caller recovery.
+        keys(self._methodInvokers).forEach(id => {
+          self._methodInvokers[id].abort(
+            'Connection closed before method completed'
+          );
+        });
+      }
     };
 
     if (Meteor.isServer) {
