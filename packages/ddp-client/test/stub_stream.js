@@ -51,7 +51,18 @@ _.extend(StubStream.prototype, {
     });
   },
 
+  disconnect: function() {
+    const self = this;
+    if (self.callbacks['disconnect']) {
+      _.each(self.callbacks['disconnect'], function(cb) {
+        cb();
+      });
+    }
+  },
+
   // Provide a tag to detect stub streams.
   // We don't log heartbeat failures on stub streams, for example.
-  _isStub: true
+  _isStub: true,
+  // useful for testing, where we're sure we don't rely on previous method calls
+  _neverQueued: true
 });
