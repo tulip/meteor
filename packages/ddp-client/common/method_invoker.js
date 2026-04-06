@@ -60,7 +60,6 @@ export class MethodInvoker {
     this._callback = options.callback;
     this._message = options.message;
     this._onResultReceived = options.onResultReceived || (() => {});
-    this._wait = options.wait;
     this.noRetry = options.noRetry;
     this._maxRetries = options.maxRetries != null ? options.maxRetries : null;
     this._retryCount = 0;

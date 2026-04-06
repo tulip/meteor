@@ -867,7 +867,6 @@ export class Connection {
       methodId,
       callback: callback,
       onResultReceived: options.onResultReceived,
-      wait: !!options.wait,
       message: message,
       noRetry: !!options.noRetry,
       maxRetries: options.maxRetries != null ? options.maxRetries : null,
