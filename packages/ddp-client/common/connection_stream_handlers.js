@@ -157,8 +157,8 @@ export class ConnectionStreamHandlers {
    * @private
    */
   _handleOutstandingMethodsOnReset() {
-    const blocks = this._connection._outstandingMethodBlocks;
-    if (blocks.length === 0) return;
+    const queue = this._connection._methodQueue;
+    if (queue.length === 0) return;
 
     // Notify all invokers about the reconnect. Each invoker transitions
     // its own state (IN_FLIGHT → WAITING_FOR_RESEND). Retry decisions

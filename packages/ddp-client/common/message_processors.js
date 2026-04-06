@@ -79,11 +79,14 @@ export class MessageProcessors {
     // track methods that were sent on this connection so that we don't
     // quiesce until they are all done.
     //
-    // Start by clearing _methodsBlockingQuiescence: methods sent before
-    // reconnect don't matter, and any "wait" methods sent on the new connection
-    // that we drop here will be restored by the loop below.
-    self._methodsBlockingQuiescence = Object.create(null);
-    if (self._resetStores) {
+    // During reconnect, the first execution group buffers data until all its
+    // methods settle. Mark it as bufferData and populate pendingUpdates with
+    // all in-flight method IDs.
+    if (self._resetStores && !isEmpty(self._methodQueue)) {
+      const firstGroup = self._methodQueue[0];
+      firstGroup.bufferData = true;
+      firstGroup.pendingUpdates = new Set();
+
       const invokers = self._methodInvokers;
       Object.keys(invokers).forEach(id => {
         const invoker = invokers[id];
@@ -96,16 +99,9 @@ export class MessageProcessors {
             (...args) => invoker.dataVisible(...args)
           );
         } else if (invoker.isInFlight()) {
-          // This method has been sent on this connection (maybe as a resend
-          // from the last connection, maybe from onReconnect, maybe just very
-          // quickly before processing the connected message).
-          //
-          // We don't need to do anything special to ensure its callbacks get
-          // called, but we'll count it as a method which is preventing
-          // reconnect quiescence. (eg, it might be a login method that was run
-          // from onReconnect, and we don't want to see flicker by seeing a
-          // logged-out state.)
-          self._methodsBlockingQuiescence[invoker.methodId] = true;
+          // In-flight method blocks reconnect quiescence (e.g. a login method
+          // from onReconnect — we don't want UI flicker).
+          firstGroup.pendingUpdates.add(invoker.methodId);
         }
       });
     }
@@ -146,9 +142,10 @@ export class MessageProcessors {
         });
       }
 
-      if (msg.methods) {
+      if (msg.methods && !isEmpty(self._methodQueue)) {
+        const group = self._methodQueue[0];
         msg.methods.forEach(methodId => {
-          delete self._methodsBlockingQuiescence[methodId];
+          group.pendingUpdates.delete(methodId);
         });
       }
 
@@ -250,11 +247,11 @@ export class MessageProcessors {
 
     // find the outstanding request
     // should be O(1) in nearly all realistic use cases
-    if (isEmpty(self._outstandingMethodBlocks)) {
+    if (isEmpty(self._methodQueue)) {
       Meteor._debug('Received method result but no methods outstanding');
       return;
     }
-    const currentMethodBlock = self._outstandingMethodBlocks[0].methods;
+    const currentMethodBlock = self._methodQueue[0].methods;
     const m = currentMethodBlock.find(method => method.methodId === msg.id);
     if (!m) {
       Meteor._debug("Can't match method response to original method call", msg);

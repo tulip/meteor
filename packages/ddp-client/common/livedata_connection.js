@@ -117,40 +117,33 @@ export class Connection {
     // Tracks methods which the user has called but whose result messages have not
     // arrived yet.
     //
-    // _outstandingMethodBlocks is an array of blocks of methods. Each block
-    // represents a set of methods that can run at the same time. The first block
-    // represents the methods which are currently in flight; subsequent blocks
-    // must wait for previous blocks to be fully finished before they can be sent
-    // to the server.
+    // _methodQueue is an array of execution groups. Each group is a set of
+    // methods to send in parallel. Groups are processed sequentially — all
+    // methods in a group must complete before the next group is sent.
     //
-    // Each block is an object with the following fields:
-    // - methods: a list of MethodInvoker objects
-    // - wait: a boolean; if true, this block had a single method invoked with
-    //         the "wait" option
+    // Each group is an object with:
+    //   - methods: array of MethodInvoker objects
+    //   - bufferData: boolean — if true, incoming data messages are buffered
+    //     until all methods in this group have received their 'updated' message.
+    //     This prevents the client from seeing partial state from the group's
+    //     writes. Set to true for barrier groups (single-method groups created
+    //     by `wait: true`) and during reconnect (all in-flight methods buffer).
+    //   - pendingUpdates: Set of method IDs still waiting for 'updated'. When
+    //     empty and bufferData is true, quiescence ends for this group.
     //
-    // There will never be adjacent blocks with wait=false, because the only thing
-    // that makes methods need to be serialized is a wait method.
-    //
-    // Methods are removed from the first block when their "result" is
-    // received. The entire first block is only removed when all of the in-flight
-    // methods have received their results (so the "methods" list is empty) *AND*
-    // all of the data written by those methods are visible in the local cache. So
-    // it is possible for the first block's methods list to be empty, if we are
-    // still waiting for some objects to quiesce.
+    // The scheduler does not know about 'wait' — it only processes groups.
+    // The 'wait' flag is consumed at scheduling time (_addOutstandingMethod)
+    // to decide whether to append to the current group or start a new one.
     //
     // Example:
-    //  _outstandingMethodBlocks = [
-    //    {wait: false, methods: []},
-    //    {wait: true, methods: [<MethodInvoker for 'login'>]},
-    //    {wait: false, methods: [<MethodInvoker for 'foo'>,
-    //                            <MethodInvoker for 'bar'>]}]
-    // This means that there were some methods which were sent to the server and
-    // which have returned their results, but some of the data written by
-    // the methods may not be visible in the local cache. Once all that data is
-    // visible, we will send a 'login' method. Once the login method has returned
-    // and all the data is visible (including re-running subs if userId changes),
-    // we will send the 'foo' and 'bar' methods in parallel.
-    self._outstandingMethodBlocks = [];
+    //   _methodQueue = [
+    //     {bufferData: false, pendingUpdates: new Set(), methods: []},
+    //     {bufferData: true,  pendingUpdates: new Set(['id2']),
+    //      methods: [<MethodInvoker for 'login'>]},
+    //     {bufferData: false, pendingUpdates: new Set(),
+    //      methods: [<MethodInvoker for 'foo'>, <MethodInvoker for 'bar'>]}
+    //   ]
+    self._methodQueue = [];
 
     // method ID -> array of objects with keys 'collection' and 'id', listing
     // documents written by a given method's stub. keys are associated with
@@ -190,10 +183,8 @@ export class Connection {
 
     // This buffers the messages that aren't being processed yet.
     self._messagesBufferedUntilQuiescence = [];
-    // Map from method ID -> true. Methods are removed from this when their
-    // "data done" message is received, and we will not quiesce until it is
-    // empty.
-    self._methodsBlockingQuiescence = {};
+    // Quiescence is derived from the current execution group's pendingUpdates
+    // set. No separate tracking structure needed — see _waitingForQuiescence().
     // map from sub ID -> true for subs that were ready (ie, called the sub
     // ready callback) before reconnect but haven't become ready again yet
     self._subsBeingRevived = {}; // map from sub._id -> true
@@ -261,7 +252,7 @@ export class Connection {
       // requires both before firing the callback.
       if (!this.options.retry || this._stream._forcedToDisconnect) {
         // Abort all outstanding method invokers. _onMethodComplete handles
-        // removal from both _methodInvokers and _outstandingMethodBlocks.
+        // removal from both _methodInvokers and _methodQueue.
         keys(this._methodInvokers).forEach(id => {
           this._methodInvokers[id].abort(
             'Connection closed before method completed'
@@ -1136,10 +1127,9 @@ export class Connection {
   // revived or early methods to finish their data, or we are waiting for a
   // "wait" method to finish.
   _waitingForQuiescence() {
-    return (
-      ! isEmpty(this._subsBeingRevived) ||
-      ! isEmpty(this._methodsBlockingQuiescence)
-    );
+    if (!isEmpty(this._subsBeingRevived)) return true;
+    const group = this._methodQueue[0];
+    return group && group.bufferData && group.pendingUpdates.size > 0;
   }
 
   // Returns true if any method whose message has been sent to the server has
@@ -1337,34 +1327,36 @@ export class Connection {
   }
 
   _addOutstandingMethod(methodInvoker, options) {
-    if (options?.wait) {
-      // It's a wait method! Wait methods go in their own block.
-      this._outstandingMethodBlocks.push({
-        wait: true,
-        methods: [methodInvoker]
+    const isBarrier = !!options?.wait;
+
+    if (isBarrier) {
+      // Barrier method — gets its own group with data buffering.
+      this._methodQueue.push({
+        bufferData: true,
+        pendingUpdates: new Set(),
+        methods: [methodInvoker],
       });
     } else {
-      // Not a wait method. Start a new block if the previous block was a wait
-      // block, and add it to the last block of methods.
-      if (isEmpty(this._outstandingMethodBlocks) ||
-          last(this._outstandingMethodBlocks).wait) {
-        this._outstandingMethodBlocks.push({
-          wait: false,
+      // Parallel method — append to current group, or start a new one
+      // if the queue is empty or the last group is a barrier.
+      if (isEmpty(this._methodQueue) ||
+          this._methodQueue[this._methodQueue.length - 1].bufferData) {
+        this._methodQueue.push({
+          bufferData: false,
+          pendingUpdates: new Set(),
           methods: [],
         });
       }
 
-      last(this._outstandingMethodBlocks).methods.push(methodInvoker);
+      this._methodQueue[this._methodQueue.length - 1].methods.push(methodInvoker);
     }
 
-    // If we added it to the first block, send it out now.
-    if (this._outstandingMethodBlocks.length === 1) {
+    // If we added it to the first group, send it now.
+    if (this._methodQueue.length === 1) {
       methodInvoker.sendMessage();
-      // Wait methods block quiescence — set only at send time, not at
-      // construction. During reconnect, message_processors rebuilds this
-      // for all in-flight methods.
-      if (methodInvoker._wait) {
-        this._methodsBlockingQuiescence[methodInvoker.methodId] = true;
+      // If this group buffers data, track this method's ID for quiescence.
+      if (this._methodQueue[0].bufferData) {
+        this._methodQueue[0].pendingUpdates.add(methodInvoker.methodId);
       }
     }
   }
@@ -1372,8 +1364,8 @@ export class Connection {
   // Single callback invoked by MethodInvoker when it reaches a terminal state.
   // Handles ALL connection-side bookkeeping in one place:
   //   1. Remove from _methodInvokers map
-  //   2. Remove from _outstandingMethodBlocks
-  //   3. Advance to next method block if current block is empty
+  //   2. Remove from execution group in _methodQueue
+  //   3. Advance to next group if current group is fully complete
   //   4. Check for hot code push readiness
   _onMethodComplete(invoker) {
     const self = this;
@@ -1381,27 +1373,27 @@ export class Connection {
     // 1. Remove from the invoker tracking map.
     delete self._methodInvokers[invoker.methodId];
 
-    // 2. Remove from method blocks.
-    for (const block of self._outstandingMethodBlocks) {
-      const idx = block.methods.indexOf(invoker);
+    // 2. Remove from execution group.
+    for (const group of self._methodQueue) {
+      const idx = group.methods.indexOf(invoker);
       if (idx !== -1) {
-        block.methods.splice(idx, 1);
+        group.methods.splice(idx, 1);
         break;
       }
     }
 
-    // 3. If no methods are in-flight, advance to the next block.
+    // 3. If no methods are in-flight, advance to the next group.
     if (!self._anyMethodsAreOutstanding()) {
-      if (!isEmpty(self._outstandingMethodBlocks)) {
-        const firstBlock = self._outstandingMethodBlocks.shift();
-        if (!isEmpty(firstBlock.methods))
+      if (!isEmpty(self._methodQueue)) {
+        const firstGroup = self._methodQueue.shift();
+        if (!isEmpty(firstGroup.methods))
           throw new Error(
-            'No methods outstanding but nonempty block: ' +
-              JSON.stringify(firstBlock)
+            'No methods outstanding but nonempty group: ' +
+              JSON.stringify(firstGroup)
           );
 
-        // Send the outstanding methods now in the first block.
-        if (!isEmpty(self._outstandingMethodBlocks))
+        // Send the methods in the next group.
+        if (!isEmpty(self._methodQueue))
           self._sendOutstandingMethods();
       }
 
@@ -1410,72 +1402,70 @@ export class Connection {
     }
   }
 
-  // Sends messages for all the methods in the first block in
-  // _outstandingMethodBlocks. Methods that abort during sendMessage()
-  // (e.g. noRetry or maxRetries exceeded) are cleaned up by _onMethodComplete.
+  // Sends messages for all the methods in the first group of _methodQueue.
+  // Methods that abort during sendMessage() are cleaned up by _onMethodComplete.
   _sendOutstandingMethods() {
     const self = this;
 
-    if (isEmpty(self._outstandingMethodBlocks)) {
+    if (isEmpty(self._methodQueue)) {
       return;
     }
 
-    // Copy the array — sendMessage() may trigger _onMethodComplete which
-    // mutates the block's methods array via splice.
-    const methods = [...self._outstandingMethodBlocks[0].methods];
+    const group = self._methodQueue[0];
+    // Copy — sendMessage() may trigger _onMethodComplete which splices.
+    const methods = [...group.methods];
     methods.forEach(m => {
       m.sendMessage();
-      if (m._wait && !m.isDone()) {
-        self._methodsBlockingQuiescence[m.methodId] = true;
+      // Track for quiescence if this group buffers data.
+      if (group.bufferData && !m.isDone()) {
+        group.pendingUpdates.add(m.methodId);
       }
     });
   }
 
-  _sendOutstandingMethodBlocksMessages(oldOutstandingMethodBlocks) {
+  _mergeAndSendMethodQueue(oldQueue) {
     const self = this;
-    if (isEmpty(oldOutstandingMethodBlocks)) return;
+    if (isEmpty(oldQueue)) return;
 
     // We have at least one block worth of old outstanding methods to try
     // again. First: did onReconnect actually send anything? If not, we just
-    // restore all outstanding methods and run the first block.
-    if (isEmpty(self._outstandingMethodBlocks)) {
-      self._outstandingMethodBlocks = oldOutstandingMethodBlocks;
+    // restore all outstanding methods and run the first group.
+    if (isEmpty(self._methodQueue)) {
+      self._methodQueue = oldQueue;
       self._sendOutstandingMethods();
       return;
     }
 
-    // OK, there are blocks on both sides. Special case: merge the last block of
-    // the reconnect methods with the first block of the original methods, if
-    // neither of them are "wait" blocks.
-    if (
-      !last(self._outstandingMethodBlocks).wait &&
-      !oldOutstandingMethodBlocks[0].wait
-    ) {
+    // OK, there are groups on both sides. Special case: merge the last group of
+    // the reconnect methods with the first group of the original methods, if
+    // neither of them buffers data (i.e. neither is a barrier group).
+    const lastNew = self._methodQueue[self._methodQueue.length - 1];
+    if (!lastNew.bufferData && !oldQueue[0].bufferData) {
       // Copy — sendMessage() may trigger _onMethodComplete which splices.
-      const toMerge = [...oldOutstandingMethodBlocks[0].methods];
+      const toMerge = [...oldQueue[0].methods];
       toMerge.forEach((m) => {
-        last(self._outstandingMethodBlocks).methods.push(m);
+        lastNew.methods.push(m);
 
-        // If this "last block" is also the first block, send the message.
-        if (self._outstandingMethodBlocks.length === 1) {
+        // If this "last group" is also the first group, send the message.
+        if (self._methodQueue.length === 1) {
           m.sendMessage();
-          if (m._wait && !m.isDone()) {
-            self._methodsBlockingQuiescence[m.methodId] = true;
+          if (lastNew.bufferData && !m.isDone()) {
+            lastNew.pendingUpdates.add(m.methodId);
           }
         }
       });
 
-      oldOutstandingMethodBlocks.shift();
+      oldQueue.shift();
     }
 
-    // Now add the rest of the original blocks on.
-    self._outstandingMethodBlocks.push(...oldOutstandingMethodBlocks);
+    // Now add the rest of the original groups.
+    self._methodQueue.push(...oldQueue);
   }
 
   _callOnReconnectAndSendAppropriateOutstandingMethods() {
     const self = this;
-    const oldOutstandingMethodBlocks = self._outstandingMethodBlocks;
-    self._outstandingMethodBlocks = [];
+    const oldQueue = self._methodQueue;
+    self._methodQueue = [];
 
     self.onReconnect && self.onReconnect();
     DDP._reconnectHook.each((callback) => {
@@ -1483,7 +1473,7 @@ export class Connection {
       return true;
     });
 
-    self._sendOutstandingMethodBlocksMessages(oldOutstandingMethodBlocks);
+    self._mergeAndSendMethodQueue(oldQueue);
   }
 
   // We can accept a hot code push if there are no methods in flight.

@@ -29,8 +29,8 @@ export { InvokerState };
 //   onComplete(invoker) — notify the connection that this invoker is done
 //                          (terminal state reached, callback fired).
 //                          The connection handles all its own bookkeeping
-//                          (_methodInvokers, _outstandingMethodBlocks,
-//                          quiescence, migration) in this callback.
+//                          (_methodInvokers, _methodQueue, quiescence,
+//                          migration) in this callback.
 //
 // State machine (two-phase completion: result and updated can arrive in
 // either order):
@@ -99,8 +99,10 @@ export class MethodInvoker {
   // Sends the method message to the server. May be called additional times if
   // we lose the connection and reconnect before receiving a result.
   sendMessage() {
-    if (this.gotResult())
-      throw new Error('sendingMethod is called on method with result');
+    // Already have a result — nothing to send. This can happen when
+    // _sendOutstandingMethods iterates a group that contains an invoker
+    // which received its result before a reconnect.
+    if (this.gotResult()) return;
 
     // On re-send (reconnect), check whether this method is allowed to retry.
     if (this._state === InvokerState.WAITING_FOR_RESEND) {

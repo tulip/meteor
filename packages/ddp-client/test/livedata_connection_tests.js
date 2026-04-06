@@ -1823,9 +1823,9 @@ addReconnectTests(
 
     // white-box test:
     test.equal(
-      conn._outstandingMethodBlocks.map(function(block) {
+      conn._methodQueue.map(function(block) {
         return [
-          block.wait,
+          block.bufferData,
           block.methods.map(function(method) {
             return method._message.params[0];
           })
@@ -2049,9 +2049,9 @@ addReconnectTests(
 
     // white-box test:
     test.equal(
-      conn._outstandingMethodBlocks.map(function(block) {
+      conn._methodQueue.map(function(block) {
         return [
-          block.wait,
+          block.bufferData,
           block.methods.map(function(method) {
             return method._message.params[0];
           })
@@ -2184,7 +2184,7 @@ addReconnectTests('livedata stub - reconnect double wait method', async function
 
   // Call another method. It should be delivered immediately. This is a
   // regression test for a case where it never got delivered because there was
-  // an empty block in _outstandingMethodBlocks blocking it from being sent.
+  // an empty group in _methodQueue blocking it from being sent.
   conn.call('lastMethod', identity);
   testGotMessage(test, stream, {
     msg: 'method',
@@ -2639,7 +2639,7 @@ Tinytest.addAsync(
 
     // All invokers should be cleaned up
     test.equal(Object.keys(conn._methodInvokers).length, 0);
-    test.equal(conn._outstandingMethodBlocks.length, 0);
+    test.equal(conn._methodQueue.length, 0);
   }
 );
 
