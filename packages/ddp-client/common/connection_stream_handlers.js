@@ -160,34 +160,12 @@ export class ConnectionStreamHandlers {
     const blocks = this._connection._outstandingMethodBlocks;
     if (blocks.length === 0) return;
 
-    const currentMethodBlock = blocks[0].methods;
-    blocks[0].methods = currentMethodBlock.filter(
-      methodInvoker => {
-        // Methods with 'noRetry' option set are not allowed to re-send after
-        // recovering dropped connection.
-        if (methodInvoker.sentMessage && methodInvoker.noRetry) {
-          methodInvoker.receiveResult(
-            new Meteor.Error(
-              'invocation-failed',
-              'Method invocation might have failed due to dropped connection. ' +
-              'Failing because `noRetry` option was passed to Meteor.apply.'
-            )
-          );
-        }
-
-        // Only keep a method if it wasn't sent or it's allowed to retry.
-        return !(methodInvoker.sentMessage && methodInvoker.noRetry);
-      }
-    );
-
-    // Clear empty blocks
-    if (blocks.length > 0 && blocks[0].methods.length === 0) {
-      blocks.shift();
-    }
-
-    // Reset all method invokers as unsent
+    // Notify all invokers about the reconnect. Each invoker transitions
+    // its own state (IN_FLIGHT → WAITING_FOR_RESEND). Retry decisions
+    // (noRetry, maxRetries) are handled inside the invoker when
+    // sendMessage() is called during reconnect.
     Object.values(this._connection._methodInvokers).forEach(invoker => {
-      invoker.sentMessage = false;
+      invoker.onReconnect();
     });
   }
 

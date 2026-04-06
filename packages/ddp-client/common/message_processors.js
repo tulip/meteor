@@ -95,7 +95,7 @@ export class MessageProcessors {
           self._afterUpdateCallbacks.push(
             (...args) => invoker.dataVisible(...args)
           );
-        } else if (invoker.sentMessage) {
+        } else if (invoker.isInFlight()) {
           // This method has been sent on this connection (maybe as a resend
           // from the last connection, maybe from onReconnect, maybe just very
           // quickly before processing the connected message).

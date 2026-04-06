@@ -265,8 +265,7 @@ export class Connection {
         // as we mass-complete invokers during teardown.
         this._outstandingMethodBlocks = [];
 
-        // Abort all outstanding method invokers. If a result was already
-        // received, it is attached to the error for caller recovery.
+        // Abort all outstanding method invokers.
         keys(this._methodInvokers).forEach(id => {
           this._methodInvokers[id].abort(
             'Connection closed before method completed'
@@ -640,6 +639,7 @@ export class Connection {
    * @param {Boolean} options.wait (Client only) If true, don't send this method until all previous method calls have completed, and don't send any subsequent method calls until this one is completed.
    * @param {Function} options.onResultReceived (Client only) This callback is invoked with the error or result of the method (just like `asyncCallback`) as soon as the error or result is available. The local cache may not yet reflect the writes performed by the method.
    * @param {Boolean} options.noRetry (Client only) if true, don't send this method again on reload, simply call the callback an error with the error code 'invocation-failed'.
+   * @param {Number} options.maxRetries (Client only) Maximum number of times to re-send this method on reconnect before aborting with a 'disconnected' error. If not set, the method will be retried indefinitely (default Meteor behavior).
    * @param {Boolean} options.throwStubExceptions (Client only) If true, exceptions thrown by method stubs will be thrown instead of logged, and the method will not be invoked on the server.
    * @param {Boolean} options.returnStubValue (Client only) If true then in cases where we would have otherwise discarded the stub's return value and returned undefined, instead we go ahead and return it. Specifically, this is any time other than when (a) we are already inside a stub or (b) we are in Node and no callback was provided. Currently we require this flag to be explicitly passed to reduce the likelihood that stub return values will be confused with server return values; we may improve this in future.
    * @param {Function} [asyncCallback] Optional callback; same semantics as in [`Meteor.call`](#meteor_call).
@@ -683,6 +683,7 @@ export class Connection {
    * @param {Boolean} options.wait (Client only) If true, don't send this method until all previous method calls have completed, and don't send any subsequent method calls until this one is completed.
    * @param {Function} options.onResultReceived (Client only) This callback is invoked with the error or result of the method (just like `asyncCallback`) as soon as the error or result is available. The local cache may not yet reflect the writes performed by the method.
    * @param {Boolean} options.noRetry (Client only) if true, don't send this method again on reload, simply call the callback an error with the error code 'invocation-failed'.
+   * @param {Number} options.maxRetries (Client only) Maximum number of times to re-send this method on reconnect before aborting with a 'disconnected' error. If not set, the method will be retried indefinitely (default Meteor behavior).
    * @param {Boolean} options.throwStubExceptions (Client only) If true, exceptions thrown by method stubs will be thrown instead of logged, and the method will not be invoked on the server.
    * @param {Boolean} options.returnStubValue (Client only) If true then in cases where we would have otherwise discarded the stub's return value and returned undefined, instead we go ahead and return it. Specifically, this is any time other than when (a) we are already inside a stub or (b) we are in Node and no callback was provided. Currently we require this flag to be explicitly passed to reduce the likelihood that stub return values will be confused with server return values; we may improve this in future.
    * @param {Boolean} options.returnServerResultPromise (Client only) If true, the promise returned by applyAsync will resolve to the server's return value, rather than the stub's return value. This is useful when you want to ensure that the server's return value is used, even if the stub returns a promise. The same behavior as `callAsync`.
@@ -882,7 +883,8 @@ export class Connection {
       onResultReceived: options.onResultReceived,
       wait: !!options.wait,
       message: message,
-      noRetry: !!options.noRetry
+      noRetry: !!options.noRetry,
+      maxRetries: options.maxRetries != null ? options.maxRetries : null
     });
 
     let result;
@@ -1144,7 +1146,7 @@ export class Connection {
   // not yet invoked its user callback.
   _anyMethodsAreOutstanding() {
     const invokers = this._methodInvokers;
-    return Object.values(invokers).some((invoker) => !!invoker.sentMessage);
+    return Object.values(invokers).some((invoker) => invoker.isInFlight());
   }
 
   async _processOneDataMessage(msg, updates) {
@@ -1318,7 +1320,7 @@ export class Connection {
         const writtenByStubForAMethodWithSentMessage =
           keys(serverDoc.writtenByStubs).some(methodId => {
             const invoker = self._methodInvokers[methodId];
-            return invoker && invoker.sentMessage;
+            return invoker && invoker.isInFlight();
           });
 
         if (writtenByStubForAMethodWithSentMessage) {
@@ -1389,7 +1391,8 @@ export class Connection {
   }
 
   // Sends messages for all the methods in the first block in
-  // _outstandingMethodBlocks.
+  // _outstandingMethodBlocks. Methods that abort during sendMessage()
+  // (e.g. noRetry or maxRetries exceeded) are removed from the block.
   _sendOutstandingMethods() {
     const self = this;
 
@@ -1397,9 +1400,11 @@ export class Connection {
       return;
     }
 
-    self._outstandingMethodBlocks[0].methods.forEach(m => {
+    const block = self._outstandingMethodBlocks[0];
+    block.methods.forEach(m => {
       m.sendMessage();
     });
+    block.methods = block.methods.filter(m => !m.isDone());
   }
 
   _sendOutstandingMethodBlocksMessages(oldOutstandingMethodBlocks) {
@@ -1430,6 +1435,10 @@ export class Connection {
           m.sendMessage();
         }
       });
+
+      // Remove invokers that aborted during sendMessage().
+      const merged = last(self._outstandingMethodBlocks);
+      merged.methods = merged.methods.filter(m => !m.isDone());
 
       oldOutstandingMethodBlocks.shift();
     }

@@ -2669,6 +2669,120 @@ Tinytest.addAsync(
   }
 );
 
+Tinytest.addAsync(
+  'livedata connection - maxRetries aborts method after exceeding retry limit',
+  async function(test) {
+    const stream = new StubStream();
+    const conn = newConnection(stream);
+
+    await startAndConnect(test, stream);
+
+    // Call a method with maxRetries: 2
+    let callbackError = null;
+    conn.apply('limitedMethod', [], { maxRetries: 2 }, function(err) {
+      callbackError = err;
+    });
+    testGotMessage(test, stream, {
+      msg: 'method', method: 'limitedMethod', params: [], id: '*'
+    });
+
+    // Callback should not have fired yet
+    test.isNull(callbackError);
+
+    // Reconnect #1 — should re-send (retry 1 of 2)
+    stream.sent.length = 0;
+    await stream.reset();
+    test.isNull(callbackError);
+    // reset sends connect + re-sends the method
+    testGotMessage(test, stream, makeConnectMessage(SESSION_ID, conn._receivedCount));
+    testGotMessage(test, stream, {
+      msg: 'method', method: 'limitedMethod', params: [], id: '*'
+    });
+    await stream.receive({ msg: 'connected', session: SESSION_ID });
+
+    // Reconnect #2 — should re-send (retry 2 of 2)
+    stream.sent.length = 0;
+    await stream.reset();
+    test.isNull(callbackError);
+    testGotMessage(test, stream, makeConnectMessage(SESSION_ID, conn._receivedCount));
+    testGotMessage(test, stream, {
+      msg: 'method', method: 'limitedMethod', params: [], id: '*'
+    });
+    await stream.receive({ msg: 'connected', session: SESSION_ID });
+
+    // Reconnect #3 — should abort (exceeds maxRetries)
+    stream.sent.length = 0;
+    await stream.reset();
+
+    test.instanceOf(callbackError, Meteor.Error);
+    test.equal(callbackError.error, 'disconnected');
+    test.equal(Object.keys(conn._methodInvokers).length, 0);
+  }
+);
+
+Tinytest.addAsync(
+  'livedata connection - maxRetries 0 behaves like noRetry',
+  async function(test) {
+    const stream = new StubStream();
+    const conn = newConnection(stream);
+
+    await startAndConnect(test, stream);
+
+    let callbackError = null;
+    conn.apply('oneShotMethod', [], { maxRetries: 0 }, function(err) {
+      callbackError = err;
+    });
+    testGotMessage(test, stream, {
+      msg: 'method', method: 'oneShotMethod', params: [], id: '*'
+    });
+
+    test.isNull(callbackError);
+
+    // First reconnect should abort immediately (0 retries allowed)
+    stream.sent.length = 0;
+    await stream.reset();
+    // Method should NOT appear in sent (it was aborted, not re-sent)
+    testGotMessage(test, stream, makeConnectMessage(SESSION_ID, conn._receivedCount));
+
+    test.instanceOf(callbackError, Meteor.Error);
+    test.equal(callbackError.error, 'disconnected');
+    test.equal(Object.keys(conn._methodInvokers).length, 0);
+  }
+);
+
+Tinytest.addAsync(
+  'livedata connection - method without maxRetries retries indefinitely',
+  async function(test) {
+    const stream = new StubStream();
+    const conn = newConnection(stream);
+
+    await startAndConnect(test, stream);
+
+    let callbackFired = false;
+    conn.call('unlimitedMethod', function() {
+      callbackFired = true;
+    });
+    testGotMessage(test, stream, {
+      msg: 'method', method: 'unlimitedMethod', params: [], id: '*'
+    });
+
+    // Reconnect 5 times — method should always be re-sent
+    for (let i = 0; i < 5; i++) {
+      stream.sent.length = 0;
+      await stream.reset();
+      test.isFalse(callbackFired);
+      testGotMessage(test, stream, makeConnectMessage(SESSION_ID, conn._receivedCount));
+      testGotMessage(test, stream, {
+        msg: 'method', method: 'unlimitedMethod', params: [], id: '*'
+      });
+      await stream.receive({ msg: 'connected', session: SESSION_ID });
+    }
+
+    test.isFalse(callbackFired);
+    test.equal(Object.keys(conn._methodInvokers).length, 1);
+  }
+);
+
 // ============================================================================
 // DDP Session Resumption Tests (Client-side)
 // ============================================================================
