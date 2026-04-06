@@ -2629,10 +2629,10 @@ Tinytest.addAsync(
     test.equal(callbackBError.error, 'disconnected');
     test.isUndefined(callbackBResult);
 
-    // Case C: callback fires with disconnected error, original result preserved
+    // Case C: callback fires with disconnected error (use onResultReceived
+    // if you need the result before write confirmation)
     test.instanceOf(callbackCError, Meteor.Error);
     test.equal(callbackCError.error, 'disconnected');
-    test.equal(callbackCError.result, 'the-value');
     test.isUndefined(callbackCResult);
 
     // All invokers should be cleaned up

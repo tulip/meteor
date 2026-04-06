@@ -79,16 +79,10 @@ export class MethodInvoker {
     this._maybeInvokeCallback();
   }
   // Force-complete this invoker with an error, regardless of current state.
-  // If a result was already received, it is attached to the error so the
-  // caller can recover it (e.g. err.result).  Fires the callback exactly
-  // once and cleans up.
+  // Fires the callback exactly once and cleans up.  Callers who need the
+  // result before write confirmation should use onResultReceived.
   abort(reason) {
-    const err = new Meteor.Error('disconnected', reason);
-    if (this._methodResult) {
-      err.result = this._methodResult[1];
-      err.originalError = this._methodResult[0];
-    }
-    this._methodResult = [err, undefined];
+    this._methodResult = [new Meteor.Error('disconnected', reason), undefined];
     this._dataVisible = true;
     this._maybeInvokeCallback();
   }
