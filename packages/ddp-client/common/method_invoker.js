@@ -19,11 +19,18 @@ const InvokerState = Object.freeze({
 
 export { InvokerState };
 
-// A MethodInvoker manages sending a method to the server and calling the user's
-// callbacks. On construction, it registers itself in the connection's
-// _methodInvokers map; it removes itself once the method is fully finished and
-// the callback is invoked. This occurs when it has both received a result,
-// and the data written by it is fully visible.
+// A MethodInvoker manages sending a method to the server and calling the
+// user's callbacks. It owns its own lifecycle state and communicates with
+// the connection layer exclusively through delegate callbacks — it never
+// directly mutates connection data structures.
+//
+// The connection provides two delegate functions:
+//   send(message)     — physically send a DDP message on the wire
+//   onComplete(invoker) — notify the connection that this invoker is done
+//                          (terminal state reached, callback fired).
+//                          The connection handles all its own bookkeeping
+//                          (_methodInvokers, _outstandingMethodBlocks,
+//                          quiescence, migration) in this callback.
 //
 // State machine (two-phase completion: result and updated can arrive in
 // either order):
@@ -51,7 +58,6 @@ export class MethodInvoker {
     this._state = InvokerState.PENDING;
 
     this._callback = options.callback;
-    this._connection = options.connection;
     this._message = options.message;
     this._onResultReceived = options.onResultReceived || (() => {});
     this._wait = options.wait;
@@ -60,15 +66,16 @@ export class MethodInvoker {
     this._retryCount = 0;
     this._methodResult = null;
 
-    // Register with the connection.
-    this._connection._methodInvokers[this.methodId] = this;
+    // Delegate callbacks provided by the connection. The invoker never
+    // directly accesses connection data structures.
+    this._send = options.send;
+    this._onComplete = options.onComplete;
   }
 
-  // -- State queries (replace external flag reads) --------------------------
+  // -- State queries ---------------------------------------------------------
 
   // True if the method has been sent on the current connection and has not
-  // yet completed or been reset for resend. This is the question every
-  // external caller was asking via `invoker.sentMessage`.
+  // yet completed or been reset for resend.
   isInFlight() {
     return this._state === InvokerState.IN_FLIGHT
       || this._state === InvokerState.RESULT_RECEIVED
@@ -87,7 +94,7 @@ export class MethodInvoker {
     return !!this._methodResult;
   }
 
-  // -- State transitions (public API) ---------------------------------------
+  // -- State transitions (public API) ----------------------------------------
 
   // Sends the method message to the server. May be called additional times if
   // we lose the connection and reconnect before receiving a result.
@@ -103,19 +110,11 @@ export class MethodInvoker {
     }
 
     this._state = InvokerState.IN_FLIGHT;
-
-    // If this is a wait method, make all data messages be buffered until it is
-    // done.
-    if (this._wait)
-      this._connection._methodsBlockingQuiescence[this.methodId] = true;
-
-    // Actually send the message.
-    this._connection._send(this._message);
+    this._send(this._message);
   }
 
   // Called by the connection layer when a reconnect occurs. Marks the invoker
-  // as needing to be re-sent on the new connection. This replaces the old
-  // pattern of externally setting `invoker.sentMessage = false`.
+  // as needing to be re-sent on the new connection.
   onReconnect() {
     if (this._state === InvokerState.IN_FLIGHT
         || this._state === InvokerState.DATA_VISIBLE) {
@@ -128,8 +127,6 @@ export class MethodInvoker {
 
   // Call with the result of the method from the server. Only may be called
   // once; once it is called, you should not call sendMessage again.
-  // If the user provided an onResultReceived callback, call it immediately.
-  // Then invoke the main callback if data is also visible.
   receiveResult(err, result) {
     if (this.gotResult())
       throw new Error('Methods should only receive results once');
@@ -145,7 +142,7 @@ export class MethodInvoker {
   // Call this when all data written by the method is visible. This means that
   // the method has returned its "data is done" message *AND* all server
   // documents that are buffered at that time have been written to the local
-  // cache. Invokes the main callback if the result has been received.
+  // cache.
   dataVisible() {
     if (this._state === InvokerState.RESULT_RECEIVED) {
       this._state = InvokerState.COMPLETE;
@@ -165,11 +162,10 @@ export class MethodInvoker {
     this._fireCallback();
   }
 
-  // -- Internal methods -----------------------------------------------------
+  // -- Internal methods ------------------------------------------------------
 
   // Decides whether a method should be re-sent on reconnect. Centralizes
-  // noRetry and maxRetries logic so the connection layer doesn't need to
-  // inspect invoker internals.
+  // noRetry and maxRetries logic.
   _shouldRetry() {
     if (this.noRetry) {
       this.receiveResult(
@@ -204,15 +200,9 @@ export class MethodInvoker {
     }
   }
 
-  // Actually invoke the callback and clean up. Called at most once.
+  // Actually invoke the callback and notify the connection. Called at most once.
   _fireCallback() {
     this._callback(this._methodResult[0], this._methodResult[1]);
-
-    // Forget about this method.
-    delete this._connection._methodInvokers[this.methodId];
-
-    // Let the connection know that this method is finished, so it can try to
-    // move on to the next block of methods.
-    this._connection._outstandingMethodFinished();
+    this._onComplete(this);
   }
 }

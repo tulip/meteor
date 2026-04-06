@@ -255,21 +255,14 @@ export class MessageProcessors {
       return;
     }
     const currentMethodBlock = self._outstandingMethodBlocks[0].methods;
-    let i;
-    const m = currentMethodBlock.find((method, idx) => {
-      const found = method.methodId === msg.id;
-      if (found) i = idx;
-      return found;
-    });
+    const m = currentMethodBlock.find(method => method.methodId === msg.id);
     if (!m) {
       Meteor._debug("Can't match method response to original method call", msg);
       return;
     }
 
-    // Remove from current method block. This may leave the block empty, but we
-    // don't move on to the next block until the callback has been delivered, in
-    // _outstandingMethodFinished.
-    currentMethodBlock.splice(i, 1);
+    // The invoker stays in the method block until it reaches a terminal state.
+    // _onMethodComplete is the single place that removes from blocks.
 
     if (hasOwn.call(msg, 'error')) {
       m.receiveResult(

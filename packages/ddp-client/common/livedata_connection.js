@@ -260,12 +260,8 @@ export class Connection {
       // the WebSocket between the two) hang forever — MethodInvoker
       // requires both before firing the callback.
       if (!this.options.retry || this._stream._forcedToDisconnect) {
-        // Clear method blocks before cleanup to prevent
-        // _outstandingMethodFinished from throwing invariant errors
-        // as we mass-complete invokers during teardown.
-        this._outstandingMethodBlocks = [];
-
-        // Abort all outstanding method invokers.
+        // Abort all outstanding method invokers. _onMethodComplete handles
+        // removal from both _methodInvokers and _outstandingMethodBlocks.
         keys(this._methodInvokers).forEach(id => {
           this._methodInvokers[id].abort(
             'Connection closed before method completed'
@@ -879,13 +875,17 @@ export class Connection {
     const methodInvoker = new MethodInvoker({
       methodId,
       callback: callback,
-      connection: self,
       onResultReceived: options.onResultReceived,
       wait: !!options.wait,
       message: message,
       noRetry: !!options.noRetry,
-      maxRetries: options.maxRetries != null ? options.maxRetries : null
+      maxRetries: options.maxRetries != null ? options.maxRetries : null,
+      send: (msg) => self._send(msg),
+      onComplete: (invoker) => self._onMethodComplete(invoker),
     });
+
+    // Register in the connection's tracking map.
+    self._methodInvokers[methodInvoker.methodId] = methodInvoker;
 
     let result;
 
@@ -1360,39 +1360,59 @@ export class Connection {
     // If we added it to the first block, send it out now.
     if (this._outstandingMethodBlocks.length === 1) {
       methodInvoker.sendMessage();
+      // Wait methods block quiescence — set only at send time, not at
+      // construction. During reconnect, message_processors rebuilds this
+      // for all in-flight methods.
+      if (methodInvoker._wait) {
+        this._methodsBlockingQuiescence[methodInvoker.methodId] = true;
+      }
     }
   }
 
-  // Called by MethodInvoker after a method's callback is invoked.  If this was
-  // the last outstanding method in the current block, runs the next block. If
-  // there are no more methods, consider accepting a hot code push.
-  _outstandingMethodFinished() {
+  // Single callback invoked by MethodInvoker when it reaches a terminal state.
+  // Handles ALL connection-side bookkeeping in one place:
+  //   1. Remove from _methodInvokers map
+  //   2. Remove from _outstandingMethodBlocks
+  //   3. Advance to next method block if current block is empty
+  //   4. Check for hot code push readiness
+  _onMethodComplete(invoker) {
     const self = this;
-    if (self._anyMethodsAreOutstanding()) return;
 
-    // No methods are outstanding. This should mean that the first block of
-    // methods is empty. (Or it might not exist, if this was a method that
-    // half-finished before disconnect/reconnect.)
-    if (! isEmpty(self._outstandingMethodBlocks)) {
-      const firstBlock = self._outstandingMethodBlocks.shift();
-      if (! isEmpty(firstBlock.methods))
-        throw new Error(
-          'No methods outstanding but nonempty block: ' +
-            JSON.stringify(firstBlock)
-        );
+    // 1. Remove from the invoker tracking map.
+    delete self._methodInvokers[invoker.methodId];
 
-      // Send the outstanding methods now in the first block.
-      if (! isEmpty(self._outstandingMethodBlocks))
-        self._sendOutstandingMethods();
+    // 2. Remove from method blocks.
+    for (const block of self._outstandingMethodBlocks) {
+      const idx = block.methods.indexOf(invoker);
+      if (idx !== -1) {
+        block.methods.splice(idx, 1);
+        break;
+      }
     }
 
-    // Maybe accept a hot code push.
-    self._maybeMigrate();
+    // 3. If no methods are in-flight, advance to the next block.
+    if (!self._anyMethodsAreOutstanding()) {
+      if (!isEmpty(self._outstandingMethodBlocks)) {
+        const firstBlock = self._outstandingMethodBlocks.shift();
+        if (!isEmpty(firstBlock.methods))
+          throw new Error(
+            'No methods outstanding but nonempty block: ' +
+              JSON.stringify(firstBlock)
+          );
+
+        // Send the outstanding methods now in the first block.
+        if (!isEmpty(self._outstandingMethodBlocks))
+          self._sendOutstandingMethods();
+      }
+
+      // 4. Maybe accept a hot code push.
+      self._maybeMigrate();
+    }
   }
 
   // Sends messages for all the methods in the first block in
   // _outstandingMethodBlocks. Methods that abort during sendMessage()
-  // (e.g. noRetry or maxRetries exceeded) are removed from the block.
+  // (e.g. noRetry or maxRetries exceeded) are cleaned up by _onMethodComplete.
   _sendOutstandingMethods() {
     const self = this;
 
@@ -1400,11 +1420,15 @@ export class Connection {
       return;
     }
 
-    const block = self._outstandingMethodBlocks[0];
-    block.methods.forEach(m => {
+    // Copy the array — sendMessage() may trigger _onMethodComplete which
+    // mutates the block's methods array via splice.
+    const methods = [...self._outstandingMethodBlocks[0].methods];
+    methods.forEach(m => {
       m.sendMessage();
+      if (m._wait && !m.isDone()) {
+        self._methodsBlockingQuiescence[m.methodId] = true;
+      }
     });
-    block.methods = block.methods.filter(m => !m.isDone());
   }
 
   _sendOutstandingMethodBlocksMessages(oldOutstandingMethodBlocks) {
@@ -1427,18 +1451,19 @@ export class Connection {
       !last(self._outstandingMethodBlocks).wait &&
       !oldOutstandingMethodBlocks[0].wait
     ) {
-      oldOutstandingMethodBlocks[0].methods.forEach((m) => {
+      // Copy — sendMessage() may trigger _onMethodComplete which splices.
+      const toMerge = [...oldOutstandingMethodBlocks[0].methods];
+      toMerge.forEach((m) => {
         last(self._outstandingMethodBlocks).methods.push(m);
 
         // If this "last block" is also the first block, send the message.
         if (self._outstandingMethodBlocks.length === 1) {
           m.sendMessage();
+          if (m._wait && !m.isDone()) {
+            self._methodsBlockingQuiescence[m.methodId] = true;
+          }
         }
       });
-
-      // Remove invokers that aborted during sendMessage().
-      const merged = last(self._outstandingMethodBlocks);
-      merged.methods = merged.methods.filter(m => !m.isDone());
 
       oldOutstandingMethodBlocks.shift();
     }
