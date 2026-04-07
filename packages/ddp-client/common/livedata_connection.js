@@ -6,6 +6,7 @@ import { Random } from 'meteor/random';
 import { MongoID } from 'meteor/mongo-id';
 import { DDP } from './namespace.js';
 import { MethodInvoker } from './method_invoker';
+import { ExecutionGroup } from './execution_group';
 import {
   hasOwn,
   slice,
@@ -117,32 +118,15 @@ export class Connection {
     // Tracks methods which the user has called but whose result messages have not
     // arrived yet.
     //
-    // _methodQueue is an array of execution groups. Each group is a set of
-    // methods to send in parallel. Groups are processed sequentially — all
-    // methods in a group must complete before the next group is sent.
+    // _methodQueue is an array of ExecutionGroup instances. Each group manages
+    // a set of methods to send in parallel and tracks their two-phase completion
+    // (result + updated). Groups are processed sequentially — all methods in a
+    // group must complete before the next group is sent.
     //
-    // Each group is an object with:
-    //   - methods: array of MethodInvoker objects
-    //   - bufferData: boolean — if true, incoming data messages are buffered
-    //     until all methods in this group have received their 'updated' message.
-    //     This prevents the client from seeing partial state from the group's
-    //     writes. Set to true for barrier groups (single-method groups created
-    //     by `wait: true`) and during reconnect (all in-flight methods buffer).
-    //   - pendingUpdates: Set of method IDs still waiting for 'updated'. When
-    //     empty and bufferData is true, quiescence ends for this group.
-    //
-    // The scheduler does not know about 'wait' — it only processes groups.
-    // The 'wait' flag is consumed at scheduling time (_addOutstandingMethod)
-    // to decide whether to append to the current group or start a new one.
-    //
-    // Example:
-    //   _methodQueue = [
-    //     {bufferData: false, pendingUpdates: new Set(), methods: []},
-    //     {bufferData: true,  pendingUpdates: new Set(['id2']),
-    //      methods: [<MethodInvoker for 'login'>]},
-    //     {bufferData: false, pendingUpdates: new Set(),
-    //      methods: [<MethodInvoker for 'foo'>, <MethodInvoker for 'bar'>]}
-    //   ]
+    // See execution_group.js for the group API. The scheduler does not know
+    // about 'wait' — it only processes groups. The 'wait' flag is consumed at
+    // scheduling time (_addOutstandingMethod) to decide whether to append to
+    // the current group or create a new atomic one.
     self._methodQueue = [];
 
     // method ID -> array of objects with keys 'collection' and 'id', listing
@@ -251,12 +235,11 @@ export class Connection {
       // the WebSocket between the two) hang forever — MethodInvoker
       // requires both before firing the callback.
       if (!this.options.retry || this._stream._forcedToDisconnect) {
-        // Abort all outstanding method invokers. _onMethodComplete handles
-        // removal from both _methodInvokers and _methodQueue.
+        // Abort all outstanding method invokers and clean up.
         keys(this._methodInvokers).forEach(id => {
-          this._methodInvokers[id].abort(
-            'Connection closed before method completed'
-          );
+          const invoker = this._methodInvokers[id];
+          invoker.abort('Connection closed before method completed');
+          this._onMethodComplete(invoker);
         });
       }
     };
@@ -1128,14 +1111,17 @@ export class Connection {
   _waitingForQuiescence() {
     if (!isEmpty(this._subsBeingRevived)) return true;
     const group = this._methodQueue[0];
-    return group && group.bufferData && group.pendingUpdates.size > 0;
+    return group && group.atomic && !group.isQuiesced();
   }
 
   // Returns true if any method whose message has been sent to the server has
   // not yet invoked its user callback.
   _anyMethodsAreOutstanding() {
-    const invokers = this._methodInvokers;
-    return Object.values(invokers).some((invoker) => invoker.isInFlight());
+    // Check only the first group — methods in later groups are PENDING
+    // and shouldn't block advancement.
+    const group = this._methodQueue[0];
+    if (!group) return false;
+    return group.methods.some((invoker) => !invoker.isDone());
   }
 
   async _processOneDataMessage(msg, updates) {
@@ -1325,38 +1311,36 @@ export class Connection {
     }
   }
 
-  _addOutstandingMethod(methodInvoker, options) {
-    const isBarrier = !!options?.wait;
+  _createGroup(atomic) {
+    return new ExecutionGroup({
+      atomic,
+      onComplete: (invoker) => this._onMethodComplete(invoker),
+    });
+  }
 
-    if (isBarrier) {
-      // Barrier method — gets its own group with data buffering.
-      this._methodQueue.push({
-        bufferData: true,
-        pendingUpdates: new Set(),
-        methods: [methodInvoker],
-      });
+  _addOutstandingMethod(methodInvoker, options) {
+    if (options?.wait) {
+      // Atomic method — gets its own group. Data is buffered until it completes,
+      // and no other methods can be appended to this group.
+      const group = this._createGroup(true);
+      group.addMethod(methodInvoker);
+      this._methodQueue.push(group);
     } else {
       // Parallel method — append to current group, or start a new one
-      // if the queue is empty or the last group is a barrier.
-      if (isEmpty(this._methodQueue) ||
-          this._methodQueue[this._methodQueue.length - 1].bufferData) {
-        this._methodQueue.push({
-          bufferData: false,
-          pendingUpdates: new Set(),
-          methods: [],
-        });
+      // if the queue is empty or the last group is atomic.
+      const lastGroup = this._methodQueue[this._methodQueue.length - 1];
+      if (isEmpty(this._methodQueue) || lastGroup.atomic) {
+        const group = this._createGroup(false);
+        group.addMethod(methodInvoker);
+        this._methodQueue.push(group);
+      } else {
+        lastGroup.addMethod(methodInvoker);
       }
-
-      this._methodQueue[this._methodQueue.length - 1].methods.push(methodInvoker);
     }
 
     // If we added it to the first group, send it now.
     if (this._methodQueue.length === 1) {
       methodInvoker.sendMessage();
-      // If this group buffers data, track this method's ID for quiescence.
-      if (this._methodQueue[0].bufferData) {
-        this._methodQueue[0].pendingUpdates.add(methodInvoker.methodId);
-      }
     }
   }
 
@@ -1374,9 +1358,8 @@ export class Connection {
 
     // 2. Remove from execution group.
     for (const group of self._methodQueue) {
-      const idx = group.methods.indexOf(invoker);
-      if (idx !== -1) {
-        group.methods.splice(idx, 1);
+      if (group.hasMethod(invoker)) {
+        group.removeMethod(invoker);
         break;
       }
     }
@@ -1385,10 +1368,9 @@ export class Connection {
     if (!self._anyMethodsAreOutstanding()) {
       if (!isEmpty(self._methodQueue)) {
         const firstGroup = self._methodQueue.shift();
-        if (!isEmpty(firstGroup.methods))
+        if (!firstGroup.isEmpty())
           throw new Error(
-            'No methods outstanding but nonempty group: ' +
-              JSON.stringify(firstGroup)
+            'No methods outstanding but nonempty group'
           );
 
         // Send the methods in the next group.
@@ -1411,13 +1393,14 @@ export class Connection {
     }
 
     const group = self._methodQueue[0];
-    // Copy — sendMessage() may trigger _onMethodComplete which splices.
+    // Copy — sendMessage() may abort (noRetry/maxRetries) which modifies the group.
     const methods = [...group.methods];
     methods.forEach(m => {
       m.sendMessage();
-      // Track for quiescence if this group buffers data.
-      if (group.bufferData && !m.isDone()) {
-        group.pendingUpdates.add(m.methodId);
+      // If the invoker aborted during sendMessage (noRetry, maxRetries),
+      // clean up now.
+      if (m.isDone()) {
+        self._onMethodComplete(m);
       }
     });
   }
@@ -1437,19 +1420,19 @@ export class Connection {
 
     // OK, there are groups on both sides. Special case: merge the last group of
     // the reconnect methods with the first group of the original methods, if
-    // neither of them buffers data (i.e. neither is a barrier group).
+    // neither of them is atomic (atomic groups can't be merged).
     const lastNew = self._methodQueue[self._methodQueue.length - 1];
-    if (!lastNew.bufferData && !oldQueue[0].bufferData) {
-      // Copy — sendMessage() may trigger _onMethodComplete which splices.
+    if (!lastNew.atomic && !oldQueue[0].atomic) {
+      // Move methods from the old first group into the new last group.
       const toMerge = [...oldQueue[0].methods];
       toMerge.forEach((m) => {
-        lastNew.methods.push(m);
+        lastNew.addMethod(m);
 
         // If this "last group" is also the first group, send the message.
         if (self._methodQueue.length === 1) {
           m.sendMessage();
-          if (lastNew.bufferData && !m.isDone()) {
-            lastNew.pendingUpdates.add(m.methodId);
+          if (m.isDone()) {
+            self._onMethodComplete(m);
           }
         }
       });

@@ -79,30 +79,24 @@ export class MessageProcessors {
     // track methods that were sent on this connection so that we don't
     // quiesce until they are all done.
     //
-    // During reconnect, the first execution group buffers data until all its
-    // methods settle. Mark it as bufferData and populate pendingUpdates with
-    // all in-flight method IDs.
+    // During reconnect, upgrade the first execution group to atomic so the UI
+    // doesn't flicker. The group tracks 'updated' wire messages via
+    // receiveUpdated() and reports quiescence via isQuiesced().
     if (self._resetStores && !isEmpty(self._methodQueue)) {
       const firstGroup = self._methodQueue[0];
-      firstGroup.bufferData = true;
-      firstGroup.pendingUpdates = new Set();
+      firstGroup.atomic = true;
 
-      const invokers = self._methodInvokers;
-      Object.keys(invokers).forEach(id => {
-        const invoker = invokers[id];
-        if (invoker.gotResult()) {
-          // This method already got its result, but it didn't call its callback
-          // because its data didn't become visible. We did not resend the
-          // method RPC. We'll call its callback when we get a full quiesce,
-          // since that's as close as we'll get to "data must be visible".
-          self._afterUpdateCallbacks.push(
-            (...args) => invoker.dataVisible(...args)
-          );
-        } else if (invoker.isInFlight()) {
-          // In-flight method blocks reconnect quiescence (e.g. a login method
-          // from onReconnect — we don't want UI flicker).
-          firstGroup.pendingUpdates.add(invoker.methodId);
+      // Methods that already got their result before reconnect were NOT
+      // re-sent, so they won't get a new 'updated' message. Force-complete
+      // them after quiescence ends — mark their updated as received so
+      // they don't block quiescence, and schedule a flush.
+      for (const invoker of firstGroup.methods) {
+        if (firstGroup.hasResult(invoker.methodId)) {
+          firstGroup.receiveUpdated(invoker.methodId);
         }
+      }
+      self._afterUpdateCallbacks.push(() => {
+        firstGroup.flushCompleted();
       });
     }
 
@@ -145,7 +139,7 @@ export class MessageProcessors {
       if (msg.methods && !isEmpty(self._methodQueue)) {
         const group = self._methodQueue[0];
         msg.methods.forEach(methodId => {
-          group.pendingUpdates.delete(methodId);
+          group.receiveUpdated(methodId);
         });
       }
 
@@ -251,23 +245,22 @@ export class MessageProcessors {
       Meteor._debug('Received method result but no methods outstanding');
       return;
     }
-    const currentMethodBlock = self._methodQueue[0].methods;
-    const m = currentMethodBlock.find(method => method.methodId === msg.id);
+    const group = self._methodQueue[0];
+    const m = group.methods.find(method => method.methodId === msg.id);
     if (!m) {
       Meteor._debug("Can't match method response to original method call", msg);
       return;
     }
 
-    // The invoker stays in the method block until it reaches a terminal state.
-    // _onMethodComplete is the single place that removes from blocks.
-
+    // Deliver the result to the group, which tracks two-phase completion
+    // and will call invoker.complete() when both result and updated arrive.
     if (hasOwn.call(msg, 'error')) {
-      m.receiveResult(
+      group.receiveResult(
+        msg.id,
         new Meteor.Error(msg.error.error, msg.error.reason, msg.error.details)
       );
     } else {
-      // msg.result may be undefined if the method didn't return a value
-      m.receiveResult(undefined, msg.result);
+      group.receiveResult(msg.id, undefined, msg.result);
     }
   }
 

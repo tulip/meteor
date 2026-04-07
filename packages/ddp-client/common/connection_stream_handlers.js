@@ -160,12 +160,14 @@ export class ConnectionStreamHandlers {
     const queue = this._connection._methodQueue;
     if (queue.length === 0) return;
 
-    // Notify all invokers about the reconnect. Each invoker transitions
-    // its own state (IN_FLIGHT → WAITING_FOR_RESEND). Retry decisions
-    // (noRetry, maxRetries) are handled inside the invoker when
-    // sendMessage() is called during reconnect.
+    // Notify all invokers and groups about the reconnect.
+    // Invokers transition IN_FLIGHT → WAITING_FOR_RESEND.
+    // Groups reset wire-level state (updated/dataVisible) while preserving results.
     Object.values(this._connection._methodInvokers).forEach(invoker => {
       invoker.onReconnect();
+    });
+    queue.forEach(group => {
+      group.resetForReconnect();
     });
   }
 

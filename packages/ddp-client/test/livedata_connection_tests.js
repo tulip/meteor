@@ -1825,7 +1825,7 @@ addReconnectTests(
     test.equal(
       conn._methodQueue.map(function(block) {
         return [
-          block.bufferData,
+          block.atomic,
           block.methods.map(function(method) {
             return method._message.params[0];
           })
@@ -2051,7 +2051,7 @@ addReconnectTests(
     test.equal(
       conn._methodQueue.map(function(block) {
         return [
-          block.bufferData,
+          block.atomic,
           block.methods.map(function(method) {
             return method._message.params[0];
           })
