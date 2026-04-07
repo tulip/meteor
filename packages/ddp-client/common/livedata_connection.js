@@ -1396,6 +1396,10 @@ export class Connection {
     // Copy — sendMessage() may abort (noRetry/maxRetries) which modifies the group.
     const methods = [...group.methods];
     methods.forEach(m => {
+      // Don't re-send methods that already have their result — they won't
+      // get a new result from the server. They're waiting for dataVisible.
+      if (group.hasResult(m.methodId)) return;
+
       m.sendMessage();
       // If the invoker aborted during sendMessage (noRetry, maxRetries),
       // clean up now.
@@ -1423,13 +1427,16 @@ export class Connection {
     // neither of them is atomic (atomic groups can't be merged).
     const lastNew = self._methodQueue[self._methodQueue.length - 1];
     if (!lastNew.atomic && !oldQueue[0].atomic) {
-      // Move methods from the old first group into the new last group.
-      const toMerge = [...oldQueue[0].methods];
+      // Transfer methods from the old first group into the new last group,
+      // preserving completion state (e.g. result received before reconnect).
+      const oldGroup = oldQueue[0];
+      const toMerge = [...oldGroup.methods];
       toMerge.forEach((m) => {
-        lastNew.addMethod(m);
+        lastNew.transferMethod(m, oldGroup);
 
-        // If this "last group" is also the first group, send the message.
-        if (self._methodQueue.length === 1) {
+        // If this "last group" is also the first group, send the message
+        // (unless it already has its result from before reconnect).
+        if (self._methodQueue.length === 1 && !lastNew.hasResult(m.methodId)) {
           m.sendMessage();
           if (m.isDone()) {
             self._onMethodComplete(m);

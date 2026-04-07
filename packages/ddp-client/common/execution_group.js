@@ -50,6 +50,25 @@ export class ExecutionGroup {
     this._completion.delete(invoker.methodId);
   }
 
+  // Transfer a method from another group, preserving its completion state.
+  // Used during reconnect when merging old groups into new ones.
+  transferMethod(invoker, fromGroup) {
+    this._methods.push(invoker);
+    const existingEntry = fromGroup._completion.get(invoker.methodId);
+    if (existingEntry) {
+      this._completion.set(invoker.methodId, existingEntry);
+      fromGroup._completion.delete(invoker.methodId);
+    } else {
+      this._completion.set(invoker.methodId, {
+        gotResult: false,
+        gotUpdated: false,
+        dataVisible: false,
+        err: undefined,
+        result: undefined,
+      });
+    }
+  }
+
   hasMethod(invoker) {
     return this._completion.has(invoker.methodId);
   }
