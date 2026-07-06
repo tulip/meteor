@@ -265,8 +265,9 @@ export class Connection {
         // as we mass-complete invokers during teardown.
         this._outstandingMethodBlocks = [];
 
-        // Abort all outstanding method invokers. If a result was already
-        // received, it is attached to the error for caller recovery.
+        // Abort all outstanding method invokers. A result that already
+        // arrived is not delivered here; callers that need it before
+        // write confirmation can use onResultReceived.
         keys(this._methodInvokers).forEach(id => {
           this._methodInvokers[id].abort(
             'Connection closed before method completed'

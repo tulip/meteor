@@ -309,20 +309,9 @@ Object.assign(Session.prototype, {
     }
     self._isClosing = true;
 
-    // Drop the merge box data immediately. Every field that other code
-    // uses as an "is alive?" guard must be nulled here — send() checks
-    // self.socket, processMessage() checks self.inQueue, etc.
-    self.inQueue = null;
-    self.collectionViews = new Map();
-
     if (self._removeTimeoutHandle) {
       Meteor.clearTimeout(self._removeTimeoutHandle);
       self._removeTimeoutHandle = null;
-    }
-
-    if (self.heartbeat) {
-      self.heartbeat.stop();
-      self.heartbeat = null;
     }
 
     if (self.socket) {
