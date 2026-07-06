@@ -10,10 +10,10 @@ var packageJson = {
   dependencies: {
     // Explicit dependency because we are replacing it with a bundled version
     // and we want to make sure there are no dependencies on a higher version
-    npm: "11.10.1",
+    npm: "11.12.1",
     "node-gyp": "10.2.0",
     "node-gyp-build": "4.8.4",
-    "@mapbox/node-pre-gyp": "1.0.11",
+    "@mapbox/node-pre-gyp": "2.0.3",
     typescript: "5.9.3",
     "@meteorjs/babel": "7.20.0",
     // Keep the versions of these packages consistent with the versions

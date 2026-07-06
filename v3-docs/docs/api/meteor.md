@@ -749,6 +749,8 @@ function is rerun with the new value, assuming it didn't throw an error at the p
 If you call [`observe`](./collections.md#Mongo-Cursor-observe) or [`observeChanges`](./collections.md#Mongo-Cursor-observeChanges) in your
 publish handler, this is the place to stop the observes.
 
+As of Meteor 3.4.1, `onStop` callbacks can be `async` functions. The server awaits all async `onStop` callbacks before completing session cleanup, which prevents resource leaks from unawaited asynchronous teardown logic.
+
 <ApiBox name="Subscription#error" />
 <ApiBox name="Subscription#stop" />
 <ApiBox name="Subscription#connection" />
@@ -1029,6 +1031,51 @@ When a session correctly resumes, clients pick up exactly where they left off:
 
 To explicitly execute logic when a client reconnects (whether it resulted in a successfully resumed session or a completely fresh one), use [`DDP.onReconnect`](#DDP-onReconnect) on the client.
 
+### Presence tracking pattern
+
+Apps that previously counted online users by registering `onConnection` and `onClose` will see fewer events with session resumption — a brief network blip no longer produces a fresh `connectionId`. The recommended pattern is a periodic client-side heartbeat method that updates a `lastSeen` timestamp:
+
+```js
+// server
+import { Meteor } from "meteor/meteor";
+import { Mongo } from "meteor/mongo";
+
+const Presence = new Mongo.Collection("presence");
+
+Meteor.methods({
+  async "presence.heartbeat"() {
+    if (!this.userId) return;
+    await Presence.upsertAsync(
+      { _id: this.userId },
+      { $set: { lastSeen: new Date(), connectionId: this.connection.id } }
+    );
+  },
+});
+
+// A user is "online" if their heartbeat is recent. Tune the threshold to
+// (heartbeat interval + grace period + small buffer).
+Meteor.publish("presence.online", function () {
+  const cutoff = new Date(Date.now() - 45_000);
+  return Presence.find({ lastSeen: { $gte: cutoff } });
+});
+```
+
+```js
+// client
+import { Meteor } from "meteor/meteor";
+
+Meteor.startup(() => {
+  Meteor.subscribe("presence.online");
+
+  // Fire on startup, then every 30 seconds while the tab is open
+  const tick = () => Meteor.callAsync("presence.heartbeat");
+  tick();
+  Meteor.setInterval(tick, 30_000);
+});
+```
+
+This approach is resilient to session resumption: a heartbeat after a brief disconnect still updates `lastSeen`, so the user stays "online" without needing `onConnection` to fire again.
+
 <ApiBox name="DDP.connect"  hasCustomExample/>
 
 ```js
@@ -1097,6 +1144,10 @@ DDP.onReconnect((connection) => {
 ```
 
 Registers a callback hook that is invoked on the client whenever the DDP connection successfully re-establishes connectivity with the server. Starting in Meteor 3.5, the callback receives the connection instance which includes a `sessionResumed` boolean. You can use this flag to determine if the client recovered its previous session via the graceful disconnect period, or if the session expired forcing it to restart cleanly.
+
+Callbacks may be async functions. When any reconnect callback returns a promise,
+Meteor waits for those promises to settle before re-sending outstanding method
+messages.
 
 ## Timers { #timers }
 
