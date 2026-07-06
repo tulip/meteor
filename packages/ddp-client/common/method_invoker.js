@@ -1,50 +1,105 @@
-// A MethodInvoker manages sending a method to the server and calling the user's
-// callbacks. On construction, it registers itself in the connection's
-// _methodInvokers map; it removes itself once the method is fully finished and
-// the callback is invoked. This occurs when it has both received a result,
-// and the data written by it is fully visible.
+// MethodInvoker state enum.
+const InvokerState = Object.freeze({
+  PENDING: 'PENDING',
+  IN_FLIGHT: 'IN_FLIGHT',
+  WAITING_FOR_RESEND: 'WAITING_FOR_RESEND',
+  COMPLETE: 'COMPLETE',
+  ABORTED: 'ABORTED',
+});
+
+export { InvokerState };
+
+// A MethodInvoker manages the transport lifecycle of a single DDP method call:
+// sending the message, consuming the retry budget on reconnect, and firing the
+// user callback exactly once when it reaches a terminal state.
+//
+// The invoker does NOT track two-phase completion (result + updated) — that is
+// the ExecutionGroup's responsibility. The group calls complete() when both
+// conditions are met.
+//
+// Every terminal transition (COMPLETE or ABORTED) reports back to the
+// connection through the onComplete delegate, so connection bookkeeping
+// happens in exactly one place no matter how the method ends.
+//
+// State machine:
+//
+//   PENDING ──sendMessage()──► IN_FLIGHT ──complete()──► COMPLETE
+//                                  │
+//                             onReconnect()
+//                                  │
+//                                  ▼
+//                          WAITING_FOR_RESEND
+//                                  │
+//                            sendMessage()
+//                          ┌───────┴────────┐
+//                   consumeRetry()    consumeRetry()
+//                    returns true      returns false
+//                          │                  │
+//                          ▼                  ▼
+//                      IN_FLIGHT           ABORTED
+//
+// Any non-terminal state may also transition to ABORTED via abort().
 export class MethodInvoker {
   constructor(options) {
-    // Public (within this file) fields.
     this.methodId = options.methodId;
-    this.sentMessage = false;
+    this._state = InvokerState.PENDING;
 
     this._callback = options.callback;
-    this._connection = options.connection;
     this._message = options.message;
     this._onResultReceived = options.onResultReceived || (() => {});
-    this._wait = options.wait;
     this.noRetry = options.noRetry;
     this._maxRetries = options.maxRetries != null ? options.maxRetries : null;
     this._retryCount = 0;
-    this._methodResult = null;
-    this._dataVisible = false;
 
-    // Register with the connection.
-    this._connection._methodInvokers[this.methodId] = this;
+    // Delegates: physically send a DDP message on the wire, and report a
+    // terminal state to the connection for bookkeeping.
+    this._send = options.send;
+    this._onComplete = options.onComplete;
   }
-  // Sends the method message to the server. May be called additional times if
-  // we lose the connection and reconnect before receiving a result.
+
+  // -- State queries ---------------------------------------------------------
+
+  isInFlight() {
+    return this._state === InvokerState.IN_FLIGHT;
+  }
+
+  isAwaitingResend() {
+    return this._state === InvokerState.WAITING_FOR_RESEND;
+  }
+
+  isDone() {
+    return this._state === InvokerState.COMPLETE
+      || this._state === InvokerState.ABORTED;
+  }
+
+  // -- State transitions -----------------------------------------------------
+
+  // Sends the method message to the server. Called again when a dropped
+  // connection is recovered; the re-send consumes one retry, and the method
+  // fails once the budget (noRetry / maxRetries) is exhausted.
   sendMessage() {
-    // This function is called before sending a method (including resending on
-    // reconnect). We should only (re)send methods where we don't already have a
-    // result!
-    if (this.gotResult())
-      throw new Error('sendingMethod is called on method with result');
+    if (this.isDone()) return;
 
-    // If we're re-sending it, it doesn't matter if data was written the first
-    // time.
-    this._dataVisible = false;
-    this.sentMessage = true;
+    if (this._state === InvokerState.WAITING_FOR_RESEND && !this.consumeRetry()) {
+      this._state = InvokerState.ABORTED;
+      this._callback(
+        new Meteor.Error(
+          'invocation-failed',
+          'Method invocation might have failed due to dropped connection. ' +
+          (this.noRetry
+            ? 'Failing because `noRetry` option was passed to Meteor.apply.'
+            : 'Failing because the `maxRetries` limit was reached.')
+        ),
+        undefined
+      );
+      this._onComplete(this);
+      return;
+    }
 
-    // If this is a wait method, make all data messages be buffered until it is
-    // done.
-    if (this._wait)
-      this._connection._methodsBlockingQuiescence[this.methodId] = true;
-
-    // Actually send the message.
-    this._connection._send(this._message);
+    this._state = InvokerState.IN_FLIGHT;
+    this._send(this._message);
   }
+
   // Called when a dropped connection has been recovered and this method,
   // which had already been sent, is about to be re-sent. Consumes one retry
   // from the maxRetries budget. Returns false if the method may not be
@@ -56,51 +111,38 @@ export class MethodInvoker {
     this._retryCount++;
     return this._retryCount <= this._maxRetries;
   }
-  // Invoke the callback, if we have both a result and know that all data has
-  // been written to the local cache.
-  _maybeInvokeCallback() {
-    if (this._methodResult && this._dataVisible) {
-      // Call the callback. (This won't throw: the callback was wrapped with
-      // bindEnvironment.)
-      this._callback(this._methodResult[0], this._methodResult[1]);
 
-      // Forget about this method.
-      delete this._connection._methodInvokers[this.methodId];
-
-      // Let the connection know that this method is finished, so it can try to
-      // move on to the next block of methods.
-      this._connection._outstandingMethodFinished();
+  // Called by the connection layer when a reconnect occurs.
+  onReconnect() {
+    if (this._state === InvokerState.IN_FLIGHT) {
+      this._state = InvokerState.WAITING_FOR_RESEND;
     }
   }
-  // Call with the result of the method from the server. Only may be called
-  // once; once it is called, you should not call sendMessage again.
-  // If the user provided an onResultReceived callback, call it immediately.
-  // Then invoke the main callback if data is also visible.
-  receiveResult(err, result) {
-    if (this.gotResult())
-      throw new Error('Methods should only receive results once');
-    this._methodResult = [err, result];
+
+  // Called by the ExecutionGroup as soon as the server's result arrives,
+  // possibly before the data it wrote is visible locally. Forwards to the
+  // caller's onResultReceived callback.
+  notifyResultReceived(err, result) {
     this._onResultReceived(err, result);
-    this._maybeInvokeCallback();
   }
-  // Call this when all data written by the method is visible. This means that
-  // the method has returns its "data is done" message *AND* all server
-  // documents that are buffered at that time have been written to the local
-  // cache. Invokes the main callback if the result has been received.
-  dataVisible() {
-    this._dataVisible = true;
-    this._maybeInvokeCallback();
+
+  // Called by the ExecutionGroup when both the result and data visibility
+  // conditions are met. Fires the user callback.
+  complete(err, result) {
+    if (this.isDone()) return;
+    this._state = InvokerState.COMPLETE;
+    this._callback(err, result);
+    this._onComplete(this);
   }
-  // Force-complete this invoker with an error, regardless of current state.
-  // Fires the callback exactly once and cleans up.  Callers who need the
-  // result before write confirmation should use onResultReceived.
+
+  // Force-complete with a 'disconnected' error. Used when a non-retrying
+  // connection tears down. A result that already arrived is not delivered
+  // here; callers that need it before write confirmation should use
+  // onResultReceived.
   abort(reason) {
-    this._methodResult = [new Meteor.Error('disconnected', reason), undefined];
-    this._dataVisible = true;
-    this._maybeInvokeCallback();
-  }
-  // True if receiveResult has been called.
-  gotResult() {
-    return !!this._methodResult;
+    if (this.isDone()) return;
+    this._state = InvokerState.ABORTED;
+    this._callback(new Meteor.Error('disconnected', reason), undefined);
+    this._onComplete(this);
   }
 }
