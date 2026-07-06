@@ -79,33 +79,30 @@ export class MessageProcessors {
     // track methods that were sent on this connection so that we don't
     // quiesce until they are all done.
     //
-    // Start by clearing _methodsBlockingQuiescence: methods sent before
-    // reconnect don't matter, and any "wait" methods sent on the new connection
-    // that we drop here will be restored by the loop below.
-    self._methodsBlockingQuiescence = Object.create(null);
-    if (self._resetStores) {
-      const invokers = self._methodInvokers;
-      Object.keys(invokers).forEach(id => {
-        const invoker = invokers[id];
-        if (invoker.gotResult()) {
-          // This method already got its result, but it didn't call its callback
-          // because its data didn't become visible. We did not resend the
-          // method RPC. We'll call its callback when we get a full quiesce,
-          // since that's as close as we'll get to "data must be visible".
-          self._afterUpdateCallbacks.push(
-            (...args) => invoker.dataVisible(...args)
-          );
-        } else if (invoker.sentMessage) {
-          // This method has been sent on this connection (maybe as a resend
-          // from the last connection, maybe from onReconnect, maybe just very
-          // quickly before processing the connected message).
-          //
-          // We don't need to do anything special to ensure its callbacks get
-          // called, but we'll count it as a method which is preventing
-          // reconnect quiescence. (eg, it might be a login method that was run
-          // from onReconnect, and we don't want to see flicker by seeing a
-          // logged-out state.)
-          self._methodsBlockingQuiescence[invoker.methodId] = true;
+    // During reconnect, upgrade the first execution group to atomic so the UI
+    // doesn't flicker. The group tracks 'updated' wire messages via
+    // receiveUpdated() and reports quiescence via isQuiesced().
+    if (self._resetStores && !isEmpty(self._methodQueue)) {
+      self._methodQueue[0].atomic = true;
+
+      // Methods that already got their result before the reconnect were NOT
+      // re-sent, so no fresh 'updated' will ever arrive for them — and after
+      // a reconnect merge they are not necessarily in the first group (e.g.
+      // when onReconnect queued a wait method ahead of them). Mark their
+      // updated as received so they don't block quiescence, and force-
+      // complete them once the post-reconnect flush runs: at that point the
+      // stores have been reset and rewritten, which is as close as we get to
+      // "data must be visible".
+      for (const group of self._methodQueue) {
+        for (const invoker of group.methods) {
+          if (group.hasResult(invoker.methodId)) {
+            group.receiveUpdated(invoker.methodId);
+          }
+        }
+      }
+      self._afterUpdateCallbacks.push(() => {
+        for (const group of [...self._methodQueue]) {
+          group.flushCompleted();
         }
       });
     }
@@ -148,7 +145,11 @@ export class MessageProcessors {
 
       if (msg.methods) {
         msg.methods.forEach(methodId => {
-          delete self._methodsBlockingQuiescence[methodId];
+          // The method's group is not necessarily first (reconnect merge).
+          const group = self._methodQueue.find(g => g.hasMethodId(methodId));
+          if (group) {
+            group.receiveUpdated(methodId);
+          }
         });
       }
 
@@ -250,34 +251,26 @@ export class MessageProcessors {
 
     // find the outstanding request
     // should be O(1) in nearly all realistic use cases
-    if (isEmpty(self._outstandingMethodBlocks)) {
+    if (isEmpty(self._methodQueue)) {
       Meteor._debug('Received method result but no methods outstanding');
       return;
     }
-    const currentMethodBlock = self._outstandingMethodBlocks[0].methods;
-    let i;
-    const m = currentMethodBlock.find((method, idx) => {
-      const found = method.methodId === msg.id;
-      if (found) i = idx;
-      return found;
-    });
+    const group = self._methodQueue[0];
+    const m = group.methods.find(method => method.methodId === msg.id);
     if (!m) {
       Meteor._debug("Can't match method response to original method call", msg);
       return;
     }
 
-    // Remove from current method block. This may leave the block empty, but we
-    // don't move on to the next block until the callback has been delivered, in
-    // _outstandingMethodFinished.
-    currentMethodBlock.splice(i, 1);
-
+    // Deliver the result to the group, which tracks two-phase completion
+    // and will call invoker.complete() when both result and updated arrive.
     if (hasOwn.call(msg, 'error')) {
-      m.receiveResult(
+      group.receiveResult(
+        msg.id,
         new Meteor.Error(msg.error.error, msg.error.reason, msg.error.details)
       );
     } else {
-      // msg.result may be undefined if the method didn't return a value
-      m.receiveResult(undefined, msg.result);
+      group.receiveResult(msg.id, undefined, msg.result);
     }
   }
 

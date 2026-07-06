@@ -161,16 +161,16 @@ export class DocumentProcessors {
       });
       delete self._documentsWrittenByStub[methodId];
 
-      // We want to call the data-written callback, but we can't do so until all
-      // currently buffered messages are flushed.
-      const callbackInvoker = self._methodInvokers[methodId];
-      if (!callbackInvoker) {
-        throw new Error('No callback invoker for method ' + methodId);
+      // Data for this method is now visible in the local cache. Tell the
+      // execution group, which will complete the invoker if it also has the
+      // result. The method's group is not necessarily first (reconnect merge).
+      const group = self._methodQueue.find(g => g.hasMethodId(methodId));
+      if (!group) {
+        throw new Error('No execution group for method ' + methodId);
       }
-
-      self._runWhenAllServerDocsAreFlushed(
-        (...args) => callbackInvoker.dataVisible(...args)
-      );
+      self._runWhenAllServerDocsAreFlushed(() => {
+        group.markDataVisible(methodId);
+      });
     });
   }
 

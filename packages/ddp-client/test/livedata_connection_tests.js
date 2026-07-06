@@ -1823,9 +1823,9 @@ addReconnectTests(
 
     // white-box test:
     test.equal(
-      conn._outstandingMethodBlocks.map(function (block) {
+      conn._methodQueue.map(function (block) {
         return [
-          block.wait,
+          block.atomic,
           block.methods.map(function (method) {
             return method._message.params[0];
           })
@@ -2049,9 +2049,9 @@ addReconnectTests(
 
     // white-box test:
     test.equal(
-      conn._outstandingMethodBlocks.map(function (block) {
+      conn._methodQueue.map(function (block) {
         return [
-          block.wait,
+          block.atomic,
           block.methods.map(function (method) {
             return method._message.params[0];
           })
@@ -2184,7 +2184,7 @@ addReconnectTests('livedata stub - reconnect double wait method', async function
 
   // Call another method. It should be delivered immediately. This is a
   // regression test for a case where it never got delivered because there was
-  // an empty block in _outstandingMethodBlocks blocking it from being sent.
+  // an empty group in _methodQueue blocking it from being sent.
   conn.call('lastMethod', identity);
   testGotMessage(test, stream, {
     msg: 'method',
@@ -2639,7 +2639,7 @@ Tinytest.addAsync(
 
     // All invokers should be cleaned up
     test.equal(Object.keys(conn._methodInvokers).length, 0);
-    test.equal(conn._outstandingMethodBlocks.length, 0);
+    test.equal(conn._methodQueue.length, 0);
   }
 );
 
@@ -2666,6 +2666,111 @@ Tinytest.addAsync(
     // Callback should NOT have fired — invoker is kept alive for reconnect
     test.isFalse(callbackFired);
     test.equal(Object.keys(conn._methodInvokers).length, 1);
+  }
+);
+
+Tinytest.addAsync(
+  'livedata connection - result received before reconnect completes after onReconnect wait method',
+  async function (test) {
+    const stream = new StubStream();
+    const conn = newConnection(stream);
+
+    await startAndConnect(test, stream);
+
+    // Call a method; the server sends its 'result' but not its 'updated'.
+    let callbackError = null;
+    let callbackResult = null;
+    let callbackFired = false;
+    conn.call('halfDone', function (err, result) {
+      callbackFired = true;
+      callbackError = err;
+      callbackResult = result;
+    });
+    const message = testGotMessage(test, stream, {
+      msg: 'method', method: 'halfDone', params: [], id: '*'
+    });
+    await stream.receive({ msg: 'result', id: message.id, result: 'the-answer' });
+    test.isFalse(callbackFired); // still waiting for 'updated'
+
+    // Reconnect with an onReconnect hook that queues a wait method ahead of
+    // the outstanding ones — the half-done method lands in a later group.
+    let loginCallbackFired = false;
+    const stopper = DDP.onReconnect(reconnectingConn => {
+      if (reconnectingConn !== conn) return;
+      reconnectingConn.apply('login', [], { wait: true }, function () {
+        loginCallbackFired = true;
+      });
+    });
+
+    stream.sent.length = 0;
+    await stream.reset();
+    testGotMessage(test, stream, makeConnectMessage(SESSION_ID, conn._receivedCount));
+    // Only the wait method is sent — halfDone already has its result.
+    const loginMessage = testGotMessage(test, stream, {
+      msg: 'method', method: 'login', params: [], id: '*'
+    });
+    test.length(stream.sent, 0);
+
+    // New session id, so stores reset.
+    await stream.receive({ msg: 'connected', session: 'reconnect-session' });
+
+    // Complete the wait method.
+    await stream.receive({ msg: 'updated', methods: [loginMessage.id] });
+    await stream.receive({ msg: 'result', id: loginMessage.id, result: 'ok' });
+
+    test.isTrue(loginCallbackFired);
+
+    // The half-done method's callback fires with its original result once
+    // the post-reconnect flush runs — it must not hang forever.
+    test.isTrue(callbackFired);
+    test.isUndefined(callbackError);
+    test.equal(callbackResult, 'the-answer');
+    test.equal(Object.keys(conn._methodInvokers).length, 0);
+    test.equal(conn._methodQueue.length, 0);
+
+    stopper.stop();
+  }
+);
+
+Tinytest.addAsync(
+  'livedata connection - disconnect with retry false does not send queued methods',
+  async function (test) {
+    const stream = new StubStream();
+    const conn = newConnection(stream, { retry: false });
+
+    await startAndConnect(test, stream);
+
+    // First method: a wait method, so the second lands in a later group.
+    let waitError = null;
+    conn.apply('waitMethod', [], { wait: true }, function (err) {
+      waitError = err;
+    });
+    testGotMessage(test, stream, {
+      msg: 'method', method: 'waitMethod', params: [], id: '*'
+    });
+
+    // Second method: queued behind the wait method, never sent.
+    let queuedError = null;
+    conn.call('queuedMethod', function (err) {
+      queuedError = err;
+    });
+    test.length(stream.sent, 0);
+
+    // Disconnect. Both callbacks fire with 'disconnected', and teardown must
+    // NOT push the queued method onto the dead stream as the first group
+    // empties out.
+    await stream.disconnect();
+
+    test.instanceOf(waitError, Meteor.Error);
+    test.equal(waitError.error, 'disconnected');
+    test.instanceOf(queuedError, Meteor.Error);
+    test.equal(queuedError.error, 'disconnected');
+
+    // Nothing was written to the stream during teardown.
+    test.length(stream.sent, 0);
+
+    test.equal(Object.keys(conn._methodInvokers).length, 0);
+    test.equal(conn._methodQueue.length, 0);
   }
 );
 
@@ -2800,7 +2905,7 @@ if (Meteor.isClient) {
       test.instanceOf(callbackError, Meteor.Error);
       test.equal(callbackError.error, 'invocation-failed');
       test.equal(Object.keys(conn._methodInvokers).length, 0);
-      test.equal(conn._outstandingMethodBlocks.length, 0);
+      test.equal(conn._methodQueue.length, 0);
     }
   );
 

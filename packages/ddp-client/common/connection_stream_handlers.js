@@ -157,41 +157,19 @@ export class ConnectionStreamHandlers {
    * @private
    */
   _handleOutstandingMethodsOnReset() {
-    const blocks = this._connection._outstandingMethodBlocks;
-    if (blocks.length === 0) return;
+    const queue = this._connection._methodQueue;
+    if (queue.length === 0) return;
 
-    const currentMethodBlock = blocks[0].methods;
-    blocks[0].methods = currentMethodBlock.filter(
-      methodInvoker => {
-        // Methods which were never sent are always kept. A sent method is
-        // about to be re-sent, which consumes one retry: methods with the
-        // 'noRetry' option never re-send, and methods with 'maxRetries'
-        // re-send at most that many times.
-        if (!methodInvoker.sentMessage || methodInvoker.consumeRetry()) {
-          return true;
-        }
-
-        methodInvoker.receiveResult(
-          new Meteor.Error(
-            'invocation-failed',
-            'Method invocation might have failed due to dropped connection. ' +
-            (methodInvoker.noRetry
-              ? 'Failing because `noRetry` option was passed to Meteor.apply.'
-              : 'Failing because the `maxRetries` limit was reached.')
-          )
-        );
-        return false;
-      }
-    );
-
-    // Clear empty blocks
-    if (blocks.length > 0 && blocks[0].methods.length === 0) {
-      blocks.shift();
-    }
-
-    // Reset all method invokers as unsent
+    // Notify all invokers and groups about the reconnect.
+    // Invokers transition IN_FLIGHT → WAITING_FOR_RESEND.
+    // Groups reset wire-level state (updated/dataVisible) while preserving results.
+    // Retry budgets (noRetry / maxRetries) are consumed when the re-send is
+    // attempted — see MethodInvoker.sendMessage.
     Object.values(this._connection._methodInvokers).forEach(invoker => {
-      invoker.sentMessage = false;
+      invoker.onReconnect();
+    });
+    queue.forEach(group => {
+      group.resetForReconnect();
     });
   }
 
