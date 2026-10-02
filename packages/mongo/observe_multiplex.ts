@@ -26,6 +26,8 @@ export class ObserveMultiplexer {
   private _queue: any;
   private _handles: { [key: string]: ObserveHandle } | null;
   private _resolver: ((value?: unknown) => void) | null;
+  private _rejecter: ((reason?: unknown) => void) | null;
+  private _queryError: Error | null;
   private readonly _readyPromise: Promise<boolean | void>;
   private _isReady: boolean;
   private _cache: any;
@@ -47,10 +49,16 @@ export class ObserveMultiplexer {
     this._queue = new Meteor._AsynchronousQueue();
     this._handles = {};
     this._resolver = null;
+    this._rejecter = null;
+    this._queryError = null;
     this._isReady = false;
-    this._readyPromise = new Promise((r) => (this._resolver = r)).then(
-      () => (this._isReady = true)
-    );
+    this._readyPromise = new Promise((resolve, reject) => {
+      this._resolver = resolve;
+      this._rejecter = reject;
+    }).then(() => (this._isReady = true));
+    // queryError rejects the handles waiting for ready. This keeps a rejection with no handle
+    // waiting from being reported as unhandled.
+    this._readyPromise.catch(() => {});
     // @ts-ignore
     this._cache = new LocalCollection._CachingChangeObserver({ ordered });
     this._addHandleTasksScheduledButNotPerformed = 0;
@@ -78,6 +86,10 @@ export class ObserveMultiplexer {
       );
 
     await this._queue.runTask(async () => {
+      // A handle that found this multiplexer before queryError stopped it.
+      if (this._queryError) {
+        throw this._queryError;
+      }
       this._handles![handle._id] = handle;
       await this._sendAdds(handle);
       --this._addHandleTasksScheduledButNotPerformed;
@@ -143,7 +155,12 @@ export class ObserveMultiplexer {
     await this._queue.runTask(() => {
       if (this._ready())
         throw Error("can't claim query has an error after it worked!");
-      this._stop({ fromQueryError: true });
+      // A driver can report its first query's error here and then throw it from _init.
+      if (!this._queryError) {
+        this._queryError = err;
+        this._stop({ fromQueryError: true });
+        this._rejecter!(err);
+      }
       throw err;
     });
   }

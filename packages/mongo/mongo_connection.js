@@ -1018,14 +1018,19 @@ MongoConnection.prototype._observeChanges = async function (
       multiplexer = this._observeMultiplexers[observeKey];
     } else {
       firstHandle = true;
-      // Create a new ObserveMultiplexer.
+      // Create a new ObserveMultiplexer, and register it before anything below yields, so that
+      // observeChanges calls for the same cursor share it while its driver starts.
       multiplexer = new ObserveMultiplexer({
         ordered: ordered,
         onStop: () => {
-          delete this._observeMultiplexers[observeKey];
-          return observeDriver.stop();
+          if (this._observeMultiplexers[observeKey] === multiplexer) {
+            delete this._observeMultiplexers[observeKey];
+          }
+          // Undefined when the driver failed to start.
+          return observeDriver?.stop();
         }
       });
+      this._observeMultiplexers[observeKey] = multiplexer;
     }
 
     var observeHandle = new ObserveHandle(multiplexer,
@@ -1232,39 +1237,45 @@ MongoConnection.prototype._observeChanges = async function (
         polling: () => ({ available: true }),
       };
 
-      let {
-        driverClass,
-        matcher: selectedMatcher,
-        sorter: selectedSorter,
-      } = await this._selectReactivityDriver(configuredOrder, driverChecks);
+      // A driver that fails to start fails every handle waiting on the multiplexer, and
+      // queryError removes the multiplexer, so the next observeChanges call starts a new one.
+      try {
+        let {
+          driverClass,
+          matcher: selectedMatcher,
+          sorter: selectedSorter,
+        } = await this._selectReactivityDriver(configuredOrder, driverChecks);
 
-      // Fallback to polling if no driver is available
-      if (!driverClass) {
-        Meteor._debug('No reactivity driver available for cursor, falling back to polling');
-        driverClass = PollingObserveDriver;
-      }
+        // Fallback to polling if no driver is available
+        if (!driverClass) {
+          Meteor._debug('No reactivity driver available for cursor, falling back to polling');
+          driverClass = PollingObserveDriver;
+        }
 
-      matcher = selectedMatcher;
-      sorter = selectedSorter;
+        matcher = selectedMatcher;
+        sorter = selectedSorter;
 
-      observeDriver = new driverClass({
-        cursorDescription,
-        mongoHandle: this,
-        multiplexer,
-        ordered,
-        matcher,  // ignored by polling
-        sorter,  // ignored by polling
-        _testOnlyPollCallback: callbacks._testOnlyPollCallback
-      });
+        observeDriver = new driverClass({
+          cursorDescription,
+          mongoHandle: this,
+          multiplexer,
+          ordered,
+          matcher,  // ignored by polling
+          sorter,  // ignored by polling
+          _testOnlyPollCallback: callbacks._testOnlyPollCallback
+        });
 
-      if (observeDriver._init) {
-        await observeDriver._init();
+        if (observeDriver._init) {
+          await observeDriver._init();
+        }
+      } catch (e) {
+        // Rethrows e.
+        await multiplexer.queryError(e);
       }
 
       // This field is only set for use in tests.
       multiplexer._observeDriver = observeDriver;
     }
-    this._observeMultiplexers[observeKey] = multiplexer;
     // Blocks until the initial adds have been sent.
     await multiplexer.addHandleAndSendInitialAdds(observeHandle);
 
