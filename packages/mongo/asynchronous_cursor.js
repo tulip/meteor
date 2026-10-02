@@ -44,11 +44,14 @@ export class AsynchronousCursor {
     }
     try {
       this._pendingNext = this._dbCursor.next();
-      const result = await this._pendingNext;
-      this._pendingNext = null;
-      return result;
+      return await this._pendingNext;
     } catch (e) {
-      console.error(e);
+      // close() waits for a pending next(). One that fails while the cursor is closing ends the
+      // cursor, as close() intends; any other failure goes to the caller.
+      if (this._closing) {
+        return null;
+      }
+      throw e;
     } finally {
       this._pendingNext = null;
     }
@@ -96,10 +99,10 @@ export class AsynchronousCursor {
         resolve(this.close());
       }, timeoutMS);
 
-      // If the `_nextObjectPromise` returned first, cancel the timeout.
-      nextObjectPromise.finally(() => {
-        clearTimeout(timeoutId);
-      });
+      // If the `_nextObjectPromise` settled first, cancel the timeout. Its rejection reaches the
+      // caller through the race below.
+      const cancel = () => clearTimeout(timeoutId);
+      nextObjectPromise.then(cancel, cancel);
     });
 
     return Promise.race([nextObjectPromise, timeoutPromise]);
